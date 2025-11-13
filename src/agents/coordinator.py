@@ -6,10 +6,12 @@ from langchain.tools import tool
 
 from agents.collector import invoke_collector
 
+from utils import extract_text_from_message_content
 import json
 
 @tool
 def need_clarification():
+    """Clarification is currently under development, unavaliable for now."""
     return
 
 @tool
@@ -24,19 +26,19 @@ def handoff_to_collector(conference_name: str, year: int, round: str="all") -> l
     """
     res = []
 
-    json_path = invoke_collector(conference_name, year, round)
+    json_paths = invoke_collector(conference_name, year, round)
 
-    if json_path:
+    for json_path in json_paths:
+        if not json_path.exists():
+            raise RuntimeError(f"Collector agent failed, no json file generated for conference {conference_name} {year} {round}.")
         with open(json_path, 'r', encoding='utf-8') as f:
             papers = json.load(f)
             for paper in papers[:10]:  # Get top 10 papers
                 title = paper.get('title', 'No Title')
                 abstract = paper.get('abstract', 'No Abstract')
                 res.append({"title": title, "abstract": abstract})
-    else:
-        raise RuntimeError("Collector agent failed.")
-
     return res 
+
 @tool
 def handoff_to_searcher():
     """
@@ -64,6 +66,8 @@ def invoke_coordinator(user_input:str, enable_clarification:bool) -> dict:
 
     msgs.append({"role": "user", "content": user_input})
     
+    print(msgs)
+    
     # 运行 Agent
     result = main_agent.invoke(
         {"messages": msgs}
@@ -71,10 +75,4 @@ def invoke_coordinator(user_input:str, enable_clarification:bool) -> dict:
 
     messages = result.get("messages", [])
 
-    final_answer = "未找到答案"
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            final_answer = msg.content
-            break
-
-    return res
+    return messages[-1].content
