@@ -20,6 +20,7 @@ def get_html(url, filename):
 
 
 import json
+import re
 
 def get_parsed_content_by_selector(url: str, selectors: str):
     '''
@@ -123,3 +124,50 @@ def extract_text_from_message_content(content) -> str:
                     parts.append(t)
         return "\n".join(parts).strip()
     return str(content)
+
+
+def extract_json_from_codeblock(s: str) -> str:
+    """
+    Given a string `s`, return a JSON string in one of two ways:
+
+    1. If `s` itself is valid JSON (json.loads succeeds), return the original stripped string.
+    2. Otherwise, search for the first fenced code block labelled ```json
+       and return the inner content (stripped).
+
+    Raises:
+        TypeError: if `s` is not a string.
+        ValueError: if neither (1) nor (2) can be satisfied.
+
+    This is useful when an LLM reply contains both narrative and a JSON code block
+    and you want to extract the JSON fragment for further parsing.
+    """
+    if not isinstance(s, str):
+        raise TypeError("extract_json_from_codeblock expects a string")
+
+    candidate = s.strip()
+    # Try parsing the whole string as JSON first
+    try:
+        json.loads(candidate)
+        return candidate
+    except Exception:
+        pass
+
+    # Find explicit ```json ... ``` fenced code block (case-insensitive)
+    m = re.search(r"```\s*json\s*\n(.*?)```", s, flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # Fallback: find any fenced code block and try to strip a leading 'json' token
+    m2 = re.search(r"```\s*\n?(.*?)```", s, flags=re.DOTALL)
+    if m2:
+        inner = m2.group(1).strip()
+        # If the inner block starts with a language token like 'json' remove it
+        if inner.lower().startswith('json'):
+            # remove the first line that contains 'json'
+            parts = inner.split('\n', 1)
+            inner = parts[1].strip() if len(parts) > 1 else ''
+        if inner:
+            return inner
+
+    raise ValueError('No valid JSON found and no ```json``` code block present')
+
