@@ -5,6 +5,7 @@ from prompts.template import apply_prompt_template
 from dotenv import load_dotenv
 
 import logging
+import pprint
 
 try:
     load_dotenv()
@@ -36,7 +37,9 @@ def workflow(user_input:str):
     if is_clarification_complete:
         pass
 
-    invoke_coordinator(user_input, False)
+    res = invoke_coordinator(user_input, False)
+    pprint.pprint(res)
+
 
 if __name__ == "__main__":
     user_input = 'Show me all accepted paper in USENIX Security 2024 Summer'
