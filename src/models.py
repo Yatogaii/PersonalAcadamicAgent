@@ -1,3 +1,5 @@
+import os
+
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -18,5 +20,6 @@ def init_chat_model_from_modelscope(model_name="deepseek-ai/DeepSeek-V3.2-Exp") 
 def init_kimi_k2() -> BaseChatModel:
     model = init_chat_model(model="kimi-k2-0905-preview",
                              model_provider="openai",
-                             base_url="https://api.moonshot.cn/v1")
+                             base_url="https://api.moonshot.cn/v1",
+                             api_key=os.getenv('KIMI_API_KEY'))
     return model

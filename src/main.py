@@ -1,3 +1,4 @@
+import os
 from agents.coordinator import invoke_coordinator
 from prompts.template import apply_prompt_template
 
@@ -9,6 +10,10 @@ try:
     load_dotenv()
 except Exception as e:
     exit(0)
+    
+logging.basicConfig(level=logging.INFO)
+
+logging.debug(f"KIMI_API_KEY: {os.getenv('OPENAI_API_KEY')}")
     
 enable_clarification = False
 MAX_CLARIFICATION_ROUNDS = 3
