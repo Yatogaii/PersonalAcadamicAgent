@@ -1,3 +1,5 @@
+from parser.HTMLSelector import HTMLSelector
+
 import os
 from langchain.agents import create_agent
 import requests
@@ -8,7 +10,7 @@ from bs4 import BeautifulSoup
 from bs4.element import NavigableString
 
 from models import init_kimi_k2
-from tools.common_tools import HTMLSelector, get_raw_html_content
+from tools.common_tools import get_raw_html_content
 from prompts.template import apply_prompt_template
 
 import logging
@@ -59,9 +61,6 @@ def get_parsed_html_by_llm_summary(url: str):
     )
     msgs = apply_prompt_template("html_parse_agent")
     res = agent.invoke(input={"messages": msgs})
-    
-    
-    
     
     return res['messages'][-1].content
 

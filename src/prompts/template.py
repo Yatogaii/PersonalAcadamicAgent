@@ -9,7 +9,7 @@ env = Environment(
     lstrip_blocks=True,
 )
 
-def apply_prompt_template(prompt_name: str) -> list:
+def apply_prompt_template(prompt_name: str, params: dict = {}) -> list:
     """
     Apply template variables to a prompt template and return formatted messages.
 
@@ -21,7 +21,7 @@ def apply_prompt_template(prompt_name: str) -> list:
     """
     try:
         template = env.get_template(f"{prompt_name}.md")
-        system_prompt = template.render()
+        system_prompt = template.render(**params)
         return [{"role": "system", "content": system_prompt}]
     except Exception as e:
         raise ValueError(f"Error applying template {prompt_name}: {e}")
