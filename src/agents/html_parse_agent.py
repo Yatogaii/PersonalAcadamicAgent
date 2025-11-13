@@ -20,7 +20,7 @@ from bs4.element import NavigableString
 from models import init_kimi_k2
 from tools.common_tools import get_raw_html_content
 from prompts.template import apply_prompt_template
-from utils import extract_text_from_message_content
+from utils import extract_text_from_message_content, extract_json_from_codeblock
 
 import logging
 
@@ -44,7 +44,7 @@ def bash_exec(cmd:str) -> str:
 @tool
 def read_file(filename: str, offset: int, chunk_size: int) -> str:
     '''
-    Read a file from raw_htmls folder by line numbers.
+    Read a file from htmls folder by line numbers.
 
     Args:
         filename: the name of the file to read.
@@ -56,7 +56,7 @@ def read_file(filename: str, offset: int, chunk_size: int) -> str:
     '''
     logging.info(f'Reading file: {filename} from line: {offset} with {chunk_size} lines')
     try:
-        with open(f"raw_htmls/{filename}", "r", encoding='utf-8') as f:
+        with open(f"htmls/{filename}", "r", encoding='utf-8') as f:
             lines = f.readlines()
             # Read chunk_size lines starting from offset
             end_line = min(offset + chunk_size, len(lines))
@@ -75,7 +75,7 @@ def get_parsed_html_by_llm_summary(url: str):
     
     return res['messages'][-1].content
 
-def get_html_selector_by_llm(url: str):
+def get_html_selector_by_llm(url: str) -> str:
     agent = create_agent(
         #model="google_genai:gemini-flash-latest",
         model=init_kimi_k2(),
@@ -83,7 +83,7 @@ def get_html_selector_by_llm(url: str):
         tools=[get_raw_html_content, read_file, bash_exec],
     )
     msgs = apply_prompt_template("html_parse_agent")
-    msgs.append({"role": "user", "content": f"Please generate HTML selectors for the webpage: {url}"})
+    msgs.append({"role": "user", "content": f"Please generate HTML selectors for the webpage: {url}, the saved html file name should be tmp.html."})
     res = agent.invoke(input={"messages": msgs},config={"recursion_limit": 100},)
 
-    return extract_text_from_message_content(getattr(res, "content", res))
+    return extract_json_from_codeblock(extract_text_from_message_content(getattr(res["messages"][-1], "content", res["messages"][-1])))

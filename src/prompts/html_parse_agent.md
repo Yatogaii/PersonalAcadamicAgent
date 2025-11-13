@@ -49,9 +49,9 @@ Generate CSS selectors for:
 7. STOP - Don't read more unless you're unsure
 
 # USEFUL BASH COMMANDS:
-- grep -n "pattern" raw_htmls/temp.html | head -20  # Find patterns with line numbers
-- sed -n 'START,ENDp' raw_htmls/temp.html  # Read specific lines
-- wc -c raw_htmls/temp.html  # Get file size in bytes
+- grep -n "pattern" htmls/temp.html | head -20  # Find patterns with line numbers
+- sed -n 'START,ENDp' htmls/temp.html  # Read specific lines
+- wc -c htmls/temp.html  # Get file size in bytes
 
 # VALIDATION BEFORE OUTPUT:
 Ask yourself:
@@ -59,12 +59,14 @@ Ask yourself:
 - Are the selectors relative (not absolute paths)?
 - Will they find 50-300 papers (typical conference size)?
 
-# OUTPUT FORMAT:
+# OUTPUT FORMAT(JSON only):
 Your response MUST be a JSON with exactly these two fields:
 {
   "title": "CSS selector for title",
   "abstract": "CSS selector for abstract paragraphs"
 }
+
+**CRITICAL**: As the final answer, output ONLY a single JSON object with this exact structure.
 
 ## EXAMPLES:
 Good selectors:
@@ -79,7 +81,7 @@ Good selectors:
 }
 
 # IMPORTANT REMINDERS:
-- Be EFFICIENT! Read only 3000-5000 chars to analyze structure
+- Be EFFICIENT! Read only 100-300 lines to analyze structure
 - Focus on the REPEATING PATTERN of papers
 - Selectors will be used WITHIN each paper container (handled by the extraction code)
 - Multiple <p> tags in abstract are OK - they'll be joined automatically
