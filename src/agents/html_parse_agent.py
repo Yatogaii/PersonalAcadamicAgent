@@ -1,3 +1,11 @@
+"""
+HTML Parse Agent:
+    Recive an URL, and return the CSS Selector of this url.
+    
+We assume that all years' conference webpages have the same structure,
+so we only need to generate the selectors once for each conference.
+"""
+
 from parser.HTMLSelector import HTMLSelector
 
 import os
@@ -12,6 +20,7 @@ from bs4.element import NavigableString
 from models import init_kimi_k2
 from tools.common_tools import get_raw_html_content
 from prompts.template import apply_prompt_template
+from utils import extract_text_from_message_content
 
 import logging
 
@@ -25,7 +34,7 @@ def bash_exec(cmd:str) -> str:
     Return:
         the output of the command.
     '''
-    logging.debug("!!!!!Executing bash command:", cmd)
+    logging.info(f"Executing bash command: {cmd}")
     try:
         output = os.popen(cmd).read()
         return output
@@ -35,21 +44,23 @@ def bash_exec(cmd:str) -> str:
 @tool
 def read_file(filename: str, offset: int, chunk_size: int) -> str:
     '''
-    Read a file from raw_htmls folder.
+    Read a file from raw_htmls folder by line numbers.
 
     Args:
         filename: the name of the file to read.
-        offset: the offset to start reading from.
-        chunk_size: the size of the chunk to read.
+        offset: the starting line number (0-indexed).
+        chunk_size: the number of lines to read.
 
     Returns:
-        The content read from the file.
+        The content read from the file (line-based).
     '''
-    print('!!! Reading file:', filename, 'from offset:', offset, 'with chunk size:', chunk_size)
+    logging.info(f'Reading file: {filename} from line: {offset} with {chunk_size} lines')
     try:
-        with open(f"raw_htmls/{filename}", "r") as f:
-            f.seek(offset)
-            return f.read(chunk_size)
+        with open(f"raw_htmls/{filename}", "r", encoding='utf-8') as f:
+            lines = f.readlines()
+            # Read chunk_size lines starting from offset
+            end_line = min(offset + chunk_size, len(lines))
+            return "".join(lines[offset:end_line])
     except Exception as e:
         return f"An error occurred: {e}"
 
@@ -68,11 +79,11 @@ def get_html_selector_by_llm(url: str):
     agent = create_agent(
         #model="google_genai:gemini-flash-latest",
         model=init_kimi_k2(),
-        #tools=[get_raw_html_content, read_file, bash_exec, generate_html_tree_view],
-        response_format=ToolStrategy(HTMLSelector),
+        #response_format=ToolStrategy(HTMLSelector),
         tools=[get_raw_html_content, read_file, bash_exec],
     )
     msgs = apply_prompt_template("html_parse_agent")
-    res = agent.invoke({"messages": msgs})
+    msgs.append({"role": "user", "content": f"Please generate HTML selectors for the webpage: {url}"})
+    res = agent.invoke(input={"messages": msgs},config={"recursion_limit": 100},)
 
-    return res['structured_response']
+    return extract_text_from_message_content(getattr(res, "content", res))

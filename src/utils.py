@@ -6,16 +6,16 @@ from parser.HTMLSelector import HTMLSelector
 
 
 def get_html(url, filename):
-    logging.debug("!!!!!Getting HTML content for URL:", url)
+    logging.info(f"Getting HTML content for URL: {url}")
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an error for bad status codes
-        #print("!!!!!Getted HTML content:", response.text)  # Print first 500 characters
-        with open(f"raw_htmls/{filename}", "w", encoding='utf-8') as f:
+        #print("Getted HTML content:", response.text)  # Print first 500 characters
+        with open(f"htmls/{filename}", "w", encoding='utf-8') as f:
             f.write(response.text)
         return True
     except Exception as e:
-        print(e)
+        logging.error(f"Error getting HTML: {e}")
         return False
 
 
@@ -31,11 +31,11 @@ def get_parsed_content_by_selector(url: str, selectors: str):
     '''
     tmp_file = "temp_html.html"
     if not get_html(url, tmp_file):
-        logging.debug("!!!!!Failed to get HTML content for URL:", url)
+        logging.info(f"Failed to get HTML content for URL: {url}")
         exit(0)
     
     # Read the HTML file
-    with open(f'raw_htmls/{tmp_file}', 'r', encoding='utf-8') as f:
+    with open(f'htmls/{tmp_file}', 'r', encoding='utf-8') as f:
         html_content = f.read()
     
     # Parse selectors from JSON string
@@ -57,7 +57,7 @@ def get_parsed_content_by_selector(url: str, selectors: str):
         
         if paper_containers:
             # Extract from each paper container separately
-            print(f"!!!!!Found {len(paper_containers)} paper containers")
+            logging.info(f"Found {len(paper_containers)} paper containers")
             for paper_elem in paper_containers:
                 # Extract title from this paper
                 title_elem = paper_elem.select_one(selector_dict['title'])
@@ -74,8 +74,8 @@ def get_parsed_content_by_selector(url: str, selectors: str):
                     })
         else:
             # Fallback: if no paper containers found, try global selection
-            print("!!!!!Warning: No paper containers found, falling back to global selection")
-            print("!!!!!This may cause title/abstract mismatch if papers have multiple abstract paragraphs")
+            logging.info("Warning: No paper containers found, falling back to global selection")
+            logging.info("This may cause title/abstract mismatch if papers have multiple abstract paragraphs")
             
             titles = [elem.get_text(strip=True) for elem in soup.select(selector_dict['title'])]
             abstract_elems = soup.select(selector_dict['abstract'])
@@ -110,3 +110,16 @@ def get_parsed_content_by_selector(url: str, selectors: str):
         
         return json.dumps(extracted_content, ensure_ascii=False, indent=2)
 
+def extract_text_from_message_content(content) -> str:
+    """Normalize AIMessage.content (may be str or list of blocks) into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict):
+                t = p.get("text")
+                if isinstance(t, str):
+                    parts.append(t)
+        return "\n".join(parts).strip()
+    return str(content)

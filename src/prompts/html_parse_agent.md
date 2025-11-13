@@ -22,22 +22,22 @@ Generate CSS selectors for:
 
 # AVAILABLE TOOLS:
 1. get_raw_html_content(url, filename) -> bool
-   - Downloads HTML from URL and saves to raw_htmls/filename
+   - Downloads HTML from URL and saves to htmls/filename
    
 2. read_file(filename, offset, chunk_size) -> str
-   - Reads a chunk from raw_htmls/filename starting at offset
+   - Reads a chunk from htmls/filename starting at offset
    
 3. bash_exec(cmd) -> str
-   - Executes bash commands (file is in raw_htmls/ folder)
+   - Executes bash commands (file is in htmls/ folder)
 
 # EFFICIENT STRATEGY (to avoid recursion limit):
 1. Download HTML: get_raw_html_content(url, "temp.html")
 
 2. Find where papers start (skip headers):
-   bash_exec("grep -n 'article\\|<h2\\|paper' raw_htmls/temp.html | head -10")
+   bash_exec("grep -n 'article\\|<h2\\|paper' htmls/temp.html | head -10")
    
 3. Get file size and calculate offset:
-   bash_exec("wc -c raw_htmls/temp.html")
+   bash_exec("wc -c htmls/temp.html")
    
 4. Read a SMALL sample (3000-5000 chars) containing 2-3 papers:
    read_file("temp.html", calculated_offset, 4000)
