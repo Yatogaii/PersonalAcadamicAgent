@@ -21,12 +21,17 @@ class MilvusProvider(RAG):
         self.top_k: int = int(top_k_raw) if top_k_raw.isdigit() else 10
 
         # --- Vector field names ---
-        self.vector_field: str = os.getenv("MILVUS_VECTOR_FIELD", "embedding")
         self.id_field: str = os.getenv("MILVUS_ID_FIELD", "id")
-        self.abstract_field: str = os.getenv("MILVUS_ABSTRACT_FIELD", "abstract")
+        self.doc_id_field: str = os.getenv("MILVUS_DOC_ID_FIELD", "doc_id")
         self.title_field: str = os.getenv("MILVUS_TITLE_FIELD", "title")
+        self.abstract_field: str = os.getenv("MILVUS_ABSTRACT_FIELD", "abstract")
+        self.content_field: str = os.getenv("MILVUS_CONTENT_FIELD", "content")
         self.url_field: str = os.getenv("MILVUS_URL_FIELD", "url")
-        self.metadata_field: str = os.getenv("MILVUS_METADATA_FIELD", "metadata")
+        self.chunk_id_field: str = os.getenv("MILVUS_CHUNK_ID_FIELD", "chunk_id")
+        self.vector_field: str = os.getenv("MILVUS_VECTOR_FIELD", "vectors")
+
+        # --- Vector index configuration ---
+        self.vector_index_metric_type: str = os.getenv("MILVUS_VECTOR_INDEX_METRIC_TYPE", "L2")
 
         # --- Embedding model configuration ---
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -42,9 +47,13 @@ class MilvusProvider(RAG):
         # Define schema for Milvus collection
         schema = MilvusClient.create_schema(fields=[
             FieldSchema(name=self.id_field, dtype=DataType.INT64, is_primary=True, auto_id=True),
-            FieldSchema(name=self.abstract_field, dtype=DataType.VARCHAR),
+            FieldSchema(name=self.doc_id_field, dtype=DataType.VARCHAR),
             FieldSchema(name=self.title_field, dtype=DataType.VARCHAR),
-            FieldSchema(name=self.vector_field, dtype=DataType.FLOAT_VECTOR, dim=self.dim),
+            FieldSchema(name=self.abstract_field, dtype=DataType.VARCHAR),
+            FieldSchema(name=self.content_field, dtype=DataType.VARCHAR, nullable=True),
+            FieldSchema(name=self.url_field, dtype=DataType.VARCHAR, nullable=True),
+            FieldSchema(name=self.chunk_id_field, dtype=DataType.INT64, nullable=True),
+            FieldSchema(name=self.vector_field, dtype=DataType.FLOAT_VECTOR, dim=self.dim, nullable=True),
         ])
         return schema
 
@@ -71,7 +80,8 @@ class MilvusProvider(RAG):
             index_params.add_index(
                 field_name=self.vector_field,
                 index_type="IVF_FLAT",
-                metric_type="L2",
+                metric_type=self.vector_index_metric_type,
+                index_name="vector_index",
                 params = {"nlist": 1024},
             )
 
