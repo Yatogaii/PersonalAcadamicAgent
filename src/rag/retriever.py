@@ -13,5 +13,9 @@ class RAG(ABC):
         pass
 
     @abstractmethod
+    def insert_documents(self, title: str, abstract: str, url: str=''):
+        pass
+
+    @abstractmethod
     def list_resources(self):
         pass
