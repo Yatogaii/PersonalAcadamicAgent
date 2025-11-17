@@ -1,6 +1,7 @@
 from pymilvus import MilvusClient, FieldSchema, DataType
 import os
-from rag.retriever import RAG
+from rag.retriever import RAG, Chunk
+from uuid import uuid4
 
 from langchain.embeddings import init_embeddings
 
@@ -94,6 +95,20 @@ class MilvusProvider(RAG):
         return super().query_relevant_documents(query)
 
         
-    # Insert one paper to database.
-    def insert_documents(self, title: str, abstract: str, url: str = ''):
-        return super().insert_documents(title, abstract, url)
+    # Initially insert one paper to database.
+    def insert_document(self, title: str, abstract: str, url: str = ''):
+        '''
+        We insert pdf vector to milvus lazily.
+        For the first time we saw a pdf, we just insert title, abstract, url_of_pdf to database.
+        '''
+        data = {
+            "doc_id": uuid4(),
+            "title": title,
+            "abstract": abstract,
+            "url": url,
+        }
+
+        self.client.insert(collection_name=self.collection_name, data=data)
+    
+    def insert_document_content(self, doc_id, title, abstract, content): 
+        raise RuntimeError("Chunk strategy not implement yet!")
