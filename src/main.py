@@ -3,6 +3,7 @@ from agents.coordinator import invoke_coordinator
 from prompts.template import apply_prompt_template
 
 from dotenv import load_dotenv
+from settings import settings
 
 import logging
 import pprint
@@ -14,7 +15,6 @@ except Exception as e:
     
 logging.basicConfig(level=logging.INFO)
 
-logging.debug(f"KIMI_API_KEY: {os.getenv('OPENAI_API_KEY')}")
     
 enable_clarification = False
 MAX_CLARIFICATION_ROUNDS = 3

@@ -1,7 +1,7 @@
 from pymilvus import MilvusClient, FieldSchema, DataType
-import os
 from rag.retriever import RAG, Chunk
 from uuid import uuid4
+from settings import settings
 
 from langchain.embeddings import init_embeddings
 
@@ -12,34 +12,32 @@ class MilvusProvider(RAG):
     def __init__(self) -> None:
         super().__init__()
         # --- Connection / collection configuration ---
-        self.uri: str = os.getenv("MILVUS_URI", "http://localhost:19530")
-        self.user: str = os.getenv("MILVUS_USER", "default")
-        self.password: str = os.getenv("MILVUS_PASSWORD", "123456")
-        self.collection_name: str = os.getenv("MILVUS_COLLECTION", "documents")
+        self.uri: str = settings.milvus_uri
+        self.user: str = settings.milvus_user
+        self.password: str = settings.milvus_password
+        self.collection_name: str = settings.milvus_collection
 
         # --- Search configuration ---
-        top_k_raw = os.getenv("MILVUS_TOP_K", "10")
-        self.top_k: int = int(top_k_raw) if top_k_raw.isdigit() else 10
+        self.top_k: int = settings.milvus_top_k
 
         # --- Vector field names ---
-        self.id_field: str = os.getenv("MILVUS_ID_FIELD", "id")
-        self.doc_id_field: str = os.getenv("MILVUS_DOC_ID_FIELD", "doc_id")
-        self.title_field: str = os.getenv("MILVUS_TITLE_FIELD", "title")
-        self.abstract_field: str = os.getenv("MILVUS_ABSTRACT_FIELD", "abstract")
-        self.content_field: str = os.getenv("MILVUS_CONTENT_FIELD", "content")
-        self.url_field: str = os.getenv("MILVUS_URL_FIELD", "url")
-        self.chunk_id_field: str = os.getenv("MILVUS_CHUNK_ID_FIELD", "chunk_id")
-        self.vector_field: str = os.getenv("MILVUS_VECTOR_FIELD", "vectors")
+        self.id_field: str = settings.milvus_id_field
+        self.doc_id_field: str = settings.milvus_doc_id_field
+        self.title_field: str = settings.milvus_title_field
+        self.abstract_field: str = settings.milvus_abstract_field
+        self.content_field: str = settings.milvus_content_field
+        self.url_field: str = settings.milvus_url_field
+        self.chunk_id_field: str = settings.milvus_chunk_id_field
+        self.vector_field: str = settings.milvus_vector_field
 
         # --- Vector index configuration ---
-        self.vector_index_metric_type: str = os.getenv("MILVUS_VECTOR_INDEX_METRIC_TYPE", "L2")
+        self.vector_index_metric_type: str = settings.milvus_vector_index_metric_type
 
         # --- Embedding model configuration ---
-        self.embedding_model = os.getenv("EMBEDDING_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
-        self.embedding_model_base_url = os.getenv("EMBEDDING_MODEL_BASE_URL", "https://huggingface.co/")
-        self.embedding_model_api_key = os.getenv("EMBEDDING_MODEL_API_KEY", "")
-        self.collection_name = os.getenv("MILVUS_COLLECTION_NAME", "documents")
-        self.dim = int(os.getenv("EMBEDDING_DIM", "2048"))
+        self.embedding_model = settings.embedding_model
+        self.embedding_model_base_url = settings.embedding_model_base_url
+        self.embedding_model_api_key = settings.embedding_model_api_key
+        self.dim = settings.embedding_dim
 
         # --- Milvus Client (Lazy Load) ---
         self.client = self._get_client()
