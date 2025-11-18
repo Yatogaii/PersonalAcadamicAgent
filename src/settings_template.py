@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     rag_provider: str = "milvus"
 
     # --- Milvus / vectorstore ---
-    milvus_uri: str = "./milvus_lite.db"
+    milvus_uri: str = "http://localhost:19530"
     milvus_user: str = "default"
     milvus_password: str = "123456"
     milvus_collection: str = "documents"

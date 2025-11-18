@@ -21,5 +21,5 @@ def init_kimi_k2() -> BaseChatModel:
     model = init_chat_model(model="kimi-k2-0905-preview",
                              model_provider="openai",
                              base_url="https://api.moonshot.cn/v1",
-                             api_key=settings.kimi_api_key)
+                             api_key=settings.KIMI_API_KEY)
     return model
