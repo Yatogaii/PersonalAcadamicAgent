@@ -57,7 +57,7 @@ def _register_huggingface(api_key: str, model: str):
     )
     
 @FeatureExtractor.register("ollama")
-def _register_ollama(model: str, api_key: str):
+def _register_ollama(api_key: str, model: str):
     return OllamaEmbeddings(
         model=model,
     )
