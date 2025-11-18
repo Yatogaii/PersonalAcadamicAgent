@@ -108,24 +108,24 @@ class MilvusProvider(RAG):
             index_params = self.client.prepare_index_params()
             index_params.add_index(
                 field_name=self.doc_vector_field,
-                index_type="IVF_FLAT",
+                index_type="FLAT",
                 metric_type=self.vector_index_metric_type,
                 index_name="doc_vector_index",
                 params={"nlist": 1024},
             )
             index_params.add_index(
                 field_name=self.conference_name_field,
-                index_type="IVF_FLAT",
+                index_type="FLAT",
                 index_name="conference_name_index",
             )
             index_params.add_index(
                 field_name=self.conference_year_field,
-                index_type="IVF_FLAT",
+                index_type="FLAT",
                 index_name="conference_year_index",
             )
             index_params.add_index(
                 field_name=self.conference_round_field,
-                index_type="IVF_FLAT",
+                index_type="FLAT",
                 index_name="conference_round_index",
             )
 
@@ -146,7 +146,7 @@ class MilvusProvider(RAG):
             index_params = self.client.prepare_index_params()
             index_params.add_index(
                 field_name=self.vector_field,
-                index_type="IVF_FLAT",
+                index_type="FLAT",
                 metric_type=self.vector_index_metric_type,
                 index_name="chunk_vector_index",
                 params={"nlist": 1024},
