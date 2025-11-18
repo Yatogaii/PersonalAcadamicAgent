@@ -5,6 +5,8 @@ from langchain.messages import AIMessage
 from langchain.tools import tool
 
 from agents.collector import invoke_collector
+from rag.retriever import get_rag_client_by_provider
+from settings import settings
 
 from utils import extract_text_from_message_content
 import json
@@ -22,9 +24,20 @@ def handoff_to_collector(conference_name: str, year: int, round: str="all") -> l
         year: The year of the conference.
         round: The round of the conference (e.g., "all", "spring", "summer", "fall"). If the conference has only one round, use "all".
     Return:
-        The top 10 paper titles and abstract collected.
+        The random 10 paper titles and abstract collected.
     """
     res = []
+    
+    rag_client = get_rag_client_by_provider(settings.rag_provider)
+
+    # If conference already exists in RAG, directly return up to 10 papers from DB
+    if rag_client.check_conference_exists(conference_name, year, round):
+        chunks = rag_client.get_conference_papers(conference_name, year, round, limit=10)
+        for ch in chunks:
+            title = ch.metadata.get("title", "No Title")
+            abstract = ch.metadata.get("abstract", ch.content or "No Abstract")
+            res.append({"title": title, "abstract": abstract})
+        return res
 
     json_paths = invoke_collector(conference_name, year, round)
 
@@ -40,9 +53,13 @@ def handoff_to_collector(conference_name: str, year: int, round: str="all") -> l
     return res 
 
 @tool
-def handoff_to_searcher():
+def handoff_to_RAG(query: str):
     """
-    Searcher is currently under development, unavaliable for now.
+    UNIMPLEMENTED for now.
+    Param:
+        query: The search query string.
+    Return:
+        Enhanced Prompt with relevant documents retrieved from RAG searcher.
     """
     return
 
@@ -56,7 +73,7 @@ def invoke_coordinator(user_input:str, enable_clarification:bool) -> dict:
         #model="google_genai:gemini-flash-lite-latest",
         #model=init_chat_model_from_modelscope("Qwen/Qwen3-VL-235B-A22B-Instruct"),
         model=init_kimi_k2(),
-        tools=[handoff_to_collector, handoff_to_searcher, need_clarification],
+        tools=[handoff_to_collector, handoff_to_RAG, need_clarification],
     )
     
     msgs = apply_prompt_template("coordinator")
@@ -65,8 +82,6 @@ def invoke_coordinator(user_input:str, enable_clarification:bool) -> dict:
         msgs.append({"role": "system", "content": "clarification is now DISABLED."})
 
     msgs.append({"role": "user", "content": user_input})
-    
-    print(msgs)
     
     # 运行 Agent
     result = main_agent.invoke(

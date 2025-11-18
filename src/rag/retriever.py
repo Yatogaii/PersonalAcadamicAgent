@@ -24,6 +24,17 @@ class RAG(ABC):
     def check_conference_exists(self, conference_name: str, year: int, round: str) -> bool:
         raise NotImplementedError
 
+    @abstractmethod
+    def get_conference_papers(self, conference_name: str, year: int, round: str, limit: int = 10) -> list[Chunk]:
+        """Return up to `limit` papers for a given conference/year/round.
+
+        Implementations should return a list of Chunk objects where:
+        - content: usually abstract or main content
+        - metadata: should at least include title and url if available
+        - score: can be 0 or any placeholder when not ranked
+        """
+        raise NotImplementedError
+
 _rag_clients: dict[str, RAG] = {}
 
 def get_rag_client_by_provider(provider: str) -> RAG:

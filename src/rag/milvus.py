@@ -163,3 +163,39 @@ class MilvusProvider(RAG):
             limit=1
         )
         return len(results) > 0
+
+    def get_conference_papers(self, conference_name: str, year: int, round: str, limit: int = 10) -> list[Chunk]:
+        """Fetch up to `limit` papers for a given conference/year/round from Milvus.
+
+        This assumes that documents were inserted with title, abstract and url fields populated,
+        and that they are tagged with conference_name/year/round fields.
+        """
+        query = f'{self.conference_name_field} == "{conference_name}" && {self.conference_year_field} == {year} && {self.conference_round_field} == "{round}"'
+        results = self.client.query(
+            collection_name=self.collection_name,
+            expr=query,
+            output_fields=[
+                self.title_field,
+                self.abstract_field,
+                self.url_field,
+            ],
+            limit=limit,
+        )
+
+        chunks: list[Chunk] = []
+        for r in results:
+            title = r.get(self.title_field, "")
+            abstract = r.get(self.abstract_field, "")
+            url = r.get(self.url_field, "")
+            content = f"Title: {title}\nAbstract: {abstract}"
+            metadata = {
+                "title": title,
+                "abstract": abstract,
+                "url": url,
+                "conference_name": conference_name,
+                "conference_year": year,
+                "conference_round": round,
+            }
+            chunks.append(Chunk(content=content, metadata=metadata, score=0.0))
+
+        return chunks
