@@ -34,11 +34,11 @@ class Settings(BaseSettings):
     milvus_conference_round_field: str = "conference_round"
 
     # --- Embedding model ---
-    embedding_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    embedding_provider: str = "ollama"
+    embedding_model: str = "qwen3-embedding:4b"
     embedding_model_base_url: str = "https://huggingface.co/"
     embedding_model_api_key: str = ""
-    embedding_dim: int = 2048
-    
+    embedding_dim: int = 2560    
     chunk_strategy: str = "paragraph" # Support: paragraph, fixed_size, sentence, contextual.
     chunk_fixed_size: int = 500
 

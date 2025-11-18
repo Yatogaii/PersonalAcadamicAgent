@@ -1,6 +1,7 @@
 from typing import Any, Callable, Dict
 
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
+from langchain_ollama import OllamaEmbeddings
 
 # Use register to get class
 
@@ -53,4 +54,10 @@ def _register_huggingface(api_key: str, model: str):
     return HuggingFaceEndpointEmbeddings(
         model=model,
         huggingfacehub_api_token=api_key
+    )
+    
+@FeatureExtractor.register("ollama")
+def _register_ollama(model: str, api_key: str):
+    return OllamaEmbeddings(
+        model=model,
     )

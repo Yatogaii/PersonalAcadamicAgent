@@ -54,7 +54,7 @@ class MilvusProvider(RAG):
 
         # --- Feature Extractor ---
         self.embedding_client = FeatureExtractor(
-            provider="huggingface",
+            provider=settings.embedding_provider,
             api_key=settings.HF_TOKEN,
             model=settings.embedding_model
         )
