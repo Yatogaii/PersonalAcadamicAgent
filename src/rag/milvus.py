@@ -193,7 +193,7 @@ class MilvusProvider(RAG):
         query = f'{self.conference_name_field} == "{conference_name}" && {self.conference_year_field} == {year} && {self.conference_round_field} == "{round}"'
         results = self.client.query(
             collection_name=self.doc_collection,
-            expr=query,
+            filter=query,
             output_fields=[self.id_field],
             limit=1
         )
@@ -208,7 +208,7 @@ class MilvusProvider(RAG):
         query = f'{self.conference_name_field} == "{conference_name}" && {self.conference_year_field} == {year} && {self.conference_round_field} == "{round}"'
         results = self.client.query(
             collection_name=self.doc_collection,
-            expr=query,
+            filter=query,
             output_fields=[
                 self.title_field,
                 self.abstract_field,
