@@ -1,5 +1,6 @@
 from pymilvus import MilvusClient, FieldSchema, DataType
 from rag.retriever import RAG, Chunk
+from rag.feature_extractor import FeatureExtractor
 from uuid import uuid4
 from settings import settings
 
@@ -23,6 +24,7 @@ class MilvusProvider(RAG):
         # --- Vector field names ---
         self.id_field: str = settings.milvus_id_field
         self.doc_id_field: str = settings.milvus_doc_id_field
+        self.doc_vector_field: str = settings.milvus_doc_vector_field
         self.title_field: str = settings.milvus_title_field
         self.abstract_field: str = settings.milvus_abstract_field
         self.content_field: str = settings.milvus_content_field
@@ -39,14 +41,22 @@ class MilvusProvider(RAG):
         self.embedding_model_api_key = settings.embedding_model_api_key
         self.dim = settings.embedding_dim
 
-        # --- Milvus Client (Lazy Load) ---
+        # --- Milvus Client ---
         self.client = self._get_client()
+
+        # --- Feature Extractor ---
+        self.embedding_client = FeatureExtractor(
+            provider="huggingface",
+            api_key=settings.HF_TOKEN,
+            model=settings.embedding_model
+        )
         
     def _create_schema(self):
         # Define schema for Milvus collection
         schema = MilvusClient.create_schema(fields=[
             FieldSchema(name=self.id_field, dtype=DataType.INT64, is_primary=True, auto_id=True),
             FieldSchema(name=self.doc_id_field, dtype=DataType.VARCHAR),
+            FieldSchema(name=self.doc_vector_field, dtype=DataType.FLOAT_VECTOR, dim=self.dim, nullable=True),
             FieldSchema(name=self.title_field, dtype=DataType.VARCHAR),
             FieldSchema(name=self.abstract_field, dtype=DataType.VARCHAR),
             FieldSchema(name=self.content_field, dtype=DataType.VARCHAR, nullable=True),
@@ -99,8 +109,10 @@ class MilvusProvider(RAG):
         We insert pdf vector to milvus lazily.
         For the first time we saw a pdf, we just insert title, abstract, url_of_pdf to database.
         '''
+        doc_vector  = self.embedding_client.embed_query(f"Title: {title}\nAbstract: {abstract}")
         data = {
             "doc_id": uuid4(),
+            "doc_vectors": doc_vector,
             "title": title,
             "abstract": abstract,
             "url": url,

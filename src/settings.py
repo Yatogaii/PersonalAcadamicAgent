@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     milvus_id_field: str = "id"
     milvus_doc_id_field: str = "doc_id"
+    milvus_doc_vector_field: str = "doc_vectors"
     milvus_title_field: str = "title"
     milvus_abstract_field: str = "abstract"
     milvus_content_field: str = "content"
@@ -33,8 +34,9 @@ class Settings(BaseSettings):
     embedding_dim: int = 2048
 
     # --- API keys ---
-    kimi_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
+    kimi_api_key: str = ""
+    openai_api_key: str = ""
+    HF_TOKEN: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
