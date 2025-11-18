@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     debug_mode: bool = False
     database_url: Optional[str] = None
 
+    rag_provider: str = "milvus"
+
     # --- Milvus / vectorstore ---
     milvus_uri: str = "http://localhost:19530"
     milvus_user: str = "default"
