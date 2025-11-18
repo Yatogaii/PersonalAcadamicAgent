@@ -100,7 +100,7 @@ class MilvusProvider(RAG):
             )
 
     def query_relevant_documents(self, query: str):
-        return super().query_relevant_documents(query)
+        raise NotImplementedError("MilvusProvider.query_relevant_documents not implemented yet.")
 
         
     # Initially insert one paper to database.
@@ -122,3 +122,8 @@ class MilvusProvider(RAG):
     
     def insert_document_content(self, doc_id, title, abstract, content): 
         raise RuntimeError("Chunk strategy not implement yet!")
+
+    def list_resources(self) -> list[str]:
+        return ["Milvus Collection: " + self.collection_name]
+
+milvus_client = MilvusProvider()

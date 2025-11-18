@@ -10,12 +10,12 @@ class Chunk:
 class RAG(ABC):
     @abstractmethod
     def query_relevant_documents(self, query: str):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    def insert_documents(self, title: str, abstract: str, url: str=''):
-        pass
+    def insert_document(self, title: str, abstract: str, url: str=''):
+        raise NotImplementedError
 
     @abstractmethod
-    def list_resources(self):
-        pass
+    def list_resources(self) -> list[str]:
+        raise NotImplementedError
