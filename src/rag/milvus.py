@@ -163,5 +163,3 @@ class MilvusProvider(RAG):
             limit=1
         )
         return len(results) > 0
-
-milvus_client = MilvusProvider()
