@@ -42,6 +42,6 @@ def workflow(user_input:str):
 
 
 if __name__ == "__main__":
-    user_input = 'Show me all accepted paper in USENIX Security 2024 Summer'
+    user_input = 'Get accepted paper in USENIX Security 2024 Summer'
     workflow(user_input)
 

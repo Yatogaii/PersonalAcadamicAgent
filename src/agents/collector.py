@@ -32,6 +32,7 @@ def get_parsed_html(url: str, conference: str) -> str:
     Return:
         Absolute path (string) to saved parsed content JSON file.
     '''
+    logging.info(f"Getting parsed HTML content for URL: {url}, conference name:{conference}")
     SAVED_HTML_DIR.mkdir(parents=True, exist_ok=True)
     file_path = SAVED_HTML_DIR / f"{conference}.json"
     if file_path.exists():

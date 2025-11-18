@@ -10,6 +10,7 @@ from settings import settings
 
 from utils import extract_text_from_message_content
 import json
+import logging
 
 @tool
 def need_clarification():
@@ -26,12 +27,14 @@ def handoff_to_collector(conference_name: str, year: int, round: str="all") -> l
     Return:
         The random 10 paper titles and abstract collected.
     """
+    logging.info(f"Invoking Collector Agent for conference: {conference_name}, year: {year}, round: {round}")
     res = []
     
     rag_client = get_rag_client_by_provider(settings.rag_provider)
 
     # If conference already exists in RAG, directly return up to 10 papers from DB
     if rag_client.check_conference_exists(conference_name, year, round):
+        logging.info(f"Conference {conference_name} {year} {round} already exists in RAG. Fetching papers from RAG database.")
         chunks = rag_client.get_conference_papers(conference_name, year, round, limit=10)
         for ch in chunks:
             title = ch.metadata.get("title", "No Title")
@@ -39,7 +42,9 @@ def handoff_to_collector(conference_name: str, year: int, round: str="all") -> l
             res.append({"title": title, "abstract": abstract})
         return res
 
+    logging.info(f"Conference {conference_name} {year} {round} not found in RAG. Invoking Collector Agent to collect papers.")
     json_paths = invoke_collector(conference_name, year, round)
+    logging.info(f"Collector Agent finished. Processing collected data from JSON files. Paths: {json_paths}")
 
     for json_path in json_paths:
         if not json_path.exists():
