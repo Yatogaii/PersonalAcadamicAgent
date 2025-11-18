@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     milvus_uri: str = "./milvus_lite.db"
     milvus_user: str = "default"
     milvus_password: str = "123456"
-    milvus_collection: str = "documents"
+    milvus_doc_collection: str = "documents"
+    milvus_chunk_collection: str = "documents_chunks"
     milvus_top_k: int = 10
 
     milvus_id_field: str = "id"
