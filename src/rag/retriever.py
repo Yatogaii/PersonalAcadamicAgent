@@ -19,3 +19,7 @@ class RAG(ABC):
     @abstractmethod
     def list_resources(self) -> list[str]:
         raise NotImplementedError
+    
+    @abstractmethod
+    def check_conference_exists(self, conference_name: str, year: int, round: str) -> bool:
+        raise NotImplementedError

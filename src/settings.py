@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     milvus_chunk_id_field: str = "chunk_id"
     milvus_vector_field: str = "vectors"
     milvus_vector_index_metric_type: str = "L2"
+    milvus_conference_name_field: str = "conference_name"
+    milvus_conference_year_field: str = "conference_year"
+    milvus_conference_round_field: str = "conference_round"
 
     # --- Embedding model ---
     embedding_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"

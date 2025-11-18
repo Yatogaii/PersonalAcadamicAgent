@@ -31,6 +31,9 @@ class MilvusProvider(RAG):
         self.url_field: str = settings.milvus_url_field
         self.chunk_id_field: str = settings.milvus_chunk_id_field
         self.vector_field: str = settings.milvus_vector_field
+        self.conference_name_field: str = settings.milvus_conference_name_field
+        self.conference_year_field: str = settings.milvus_conference_year_field
+        self.conference_round_field: str = settings.milvus_conference_round_field
 
         # --- Vector index configuration ---
         self.vector_index_metric_type: str = settings.milvus_vector_index_metric_type
@@ -63,6 +66,9 @@ class MilvusProvider(RAG):
             FieldSchema(name=self.url_field, dtype=DataType.VARCHAR, nullable=True),
             FieldSchema(name=self.chunk_id_field, dtype=DataType.INT64, nullable=True),
             FieldSchema(name=self.vector_field, dtype=DataType.FLOAT_VECTOR, dim=self.dim, nullable=True),
+            FieldSchema(name=self.conference_name_field, dtype=DataType.VARCHAR),
+            FieldSchema(name=self.conference_year_field, dtype=DataType.INT64),
+            FieldSchema(name=self.conference_round_field, dtype=DataType.VARCHAR),
         ])
         return schema
 
@@ -92,6 +98,27 @@ class MilvusProvider(RAG):
                 metric_type=self.vector_index_metric_type,
                 index_name="vector_index",
                 params = {"nlist": 1024},
+            )
+            
+            index_params.add_index(
+                field_name=self.conference_name_field,
+                index_type="bitmap",
+                metric_type=self.vector_index_metric_type,
+                index_name="conference_name_index",
+            )
+
+            index_params.add_index(
+                field_name=self.conference_year_field,
+                index_type="bitmap",
+                metric_type=self.vector_index_metric_type,
+                index_name="conference_year_index",
+            )
+
+            index_params.add_index(
+                field_name=self.conference_round_field,
+                index_type="bitmap",
+                metric_type=self.vector_index_metric_type,
+                index_name="conference_round_index",
             )
 
             self.client.create_collection(
@@ -125,5 +152,16 @@ class MilvusProvider(RAG):
 
     def list_resources(self) -> list[str]:
         return ["Milvus Collection: " + self.collection_name]
+
+    def check_conference_exists(self, conference_name: str, year: int, round: str) -> bool:
+        # Check if documents from the specified conference, year, and round exist
+        query = f'{self.conference_name_field} == "{conference_name}" && {self.conference_year_field} == {year} && {self.conference_round_field} == "{round}"'
+        results = self.client.query(
+            collection_name=self.collection_name,
+            expr=query,
+            output_fields=[self.id_field],
+            limit=1
+        )
+        return len(results) > 0
 
 milvus_client = MilvusProvider()
