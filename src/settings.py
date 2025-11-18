@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     embedding_model_base_url: str = "https://huggingface.co/"
     embedding_model_api_key: str = ""
     embedding_dim: int = 2048
+    
+    chunk_strategy: str = "paragraph" # Support: paragraph, fixed_size, sentence, contextual.
+    chunk_fixed_size: int = 500
 
     # --- API keys ---
     kimi_api_key: str = ""
