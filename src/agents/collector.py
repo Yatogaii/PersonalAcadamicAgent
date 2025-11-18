@@ -1,9 +1,11 @@
 from models import init_kimi_k2
 from prompts.template import apply_prompt_template
+from settings import settings
 from utils import get_parsed_content_by_selector
 from parser.HTMLSelector import HTMLSelector, to_html_selector
 from agents.html_parse_agent import get_html_selector_by_llm
 from utils import extract_text_from_message_content, extract_json_from_codeblock
+from rag.retriever import get_rag_client_by_provider
 
 from langchain.tools import tool
 from langchain.agents import create_agent
@@ -138,4 +140,19 @@ def invoke_collector(conference_name: str, year: int, round: str="all") -> List[
     if not paths:
         logging.warning(f"No parsed_paths JSON found in agent output. Raw content: {content_text[:500]}")
         raise RuntimeError("Collector agent failed to produce parsed paths.")
+
+    # Insert all papers to RAG.
+    rag_client = get_rag_client_by_provider(settings.rag_provider)
+    for path in paths:
+        if not path.exists():
+            logging.warning(f"Parsed content file does not exist: {path}")
+            continue
+        with open(path, 'r', encoding='utf-8') as f:
+            papers = json.load(f)
+            for paper in papers:
+                title = paper.get('title', '')
+                abstract = paper.get('abstract', '')
+                url = paper.get('url', '')
+                rag_client.insert_document(title=title, abstract=abstract, url=url, conference_name=conference_name, conference_year=year, conference_round=round)
+    
     return paths

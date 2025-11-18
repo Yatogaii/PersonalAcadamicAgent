@@ -115,17 +115,17 @@ class MilvusProvider(RAG):
             )
             index_params.add_index(
                 field_name=self.conference_name_field,
-                index_type="bitmap",
+                index_type="IVF_FLAT",
                 index_name="conference_name_index",
             )
             index_params.add_index(
                 field_name=self.conference_year_field,
-                index_type="bitmap",
+                index_type="IVF_FLAT",
                 index_name="conference_year_index",
             )
             index_params.add_index(
                 field_name=self.conference_round_field,
-                index_type="bitmap",
+                index_type="IVF_FLAT",
                 index_name="conference_round_index",
             )
 
@@ -163,18 +163,21 @@ class MilvusProvider(RAG):
 
         
     # Initially insert one paper to database.
-    def insert_document(self, title: str, abstract: str, url: str = ''):
+    def insert_document(self, title: str, abstract: str, url: str = '', conference_name: str='', conference_year: int=0, conference_round: str='all'):
         '''
         We insert pdf vector to milvus lazily.
         For the first time we saw a pdf, we just insert title, abstract, url_of_pdf to database.
         '''
         doc_vector  = self.embedding_client.embed_query(f"Title: {title}\nAbstract: {abstract}")
         data = {
-            "doc_id": uuid4(),
+            "doc_id": str(uuid4()),
             "doc_vectors": doc_vector,
             "title": title,
             "abstract": abstract,
             "url": url,
+            "conference_name": conference_name,
+            "conference_year": conference_year,
+            "conference_round": conference_round,
         }
 
         self.client.insert(collection_name=self.doc_collection, data=data)
