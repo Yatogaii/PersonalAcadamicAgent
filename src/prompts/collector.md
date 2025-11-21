@@ -44,21 +44,25 @@ You must determine the `round` based on the **URL** or **Page Title**.
 # 3. Workflow (Execution Order)
 Follow this order strictly.
 
-## Step 1: Search & Filter
-- Call `search_by_ddg` with query "[Conference Name] [Year] accepted papers".
-- **Analyze Results**:
-  - Identify URLs that match the **Target** scope.
-  - **Discard** URLs matching the **Exclusions** (e.g., skip "Workshop on...", skip "Call for Papers").
-- **Stop Logic**: Only process rounds that currently have a valid, published URL. If "Fall" is not out yet, do not invent it.
+## Step 1: Discovery (Identify Rounds)
+- Call `search_by_ddg` with query "[Conference Name] [Year] accepted papers" or "[Conference Name] [Year] call for papers" to identify what rounds/cycles exist (e.g., Summer, Fall, Cycle 1, Cycle 2).
+- **Analyze Results**: Determine the list of all valid rounds for this conference year.
 
-## Step 2: Parsing (Only for New Data)
-- Call `get_parsed_html(url, conference, year, round)` for valid URLs.
-- **Arguments**:
-  - `url`: The valid URL found.
-  - `conference`: The acronym (e.g., `usenix`).
-  - `year`: The 4-digit year (e.g., `2025`).
-  - `round`: The extracted round (e.g., `fall`, `cycle1`, `all`).
-- The tool will automatically check if the conference exists in the database. If it does, it will skip parsing.
+## Step 2: Check Existence
+- Call `get_existing_rounds_from_db(conference, year)`.
+- **Compare**: Filter out rounds that are already in the database.
+- **Result**: You now have a list of *missing* rounds that need to be collected.
+
+## Step 3: Search & Parse (Missing Rounds Only)
+- **For each missing round**:
+  - Call `search_by_ddg` with query "[Conference Name] [Year] [Round] accepted papers".
+  - Identify the valid URL for the accepted papers list.
+  - Call `get_parsed_html(url, conference, year, round)`.
+  - **Arguments**:
+    - `url`: The valid URL found.
+    - `conference`: The acronym (e.g., `usenix`).
+    - `year`: The 4-digit year (e.g., `2025`).
+    - `round`: The extracted round (e.g., `fall`, `cycle1`, `all`).
 
 # 4. Final Output (JSON Only)
 Return a single JSON object containing only the **newly processed** data.

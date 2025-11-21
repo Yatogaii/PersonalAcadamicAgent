@@ -25,6 +25,11 @@ class RAG(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_existing_rounds(self, conference_name: str, year: int) -> list[str]:
+        """Return a list of rounds that exist in the DB for the given conference and year."""
+        raise NotImplementedError
+
+    @abstractmethod
     def get_conference_papers(self, conference_name: str, year: int, round: str, limit: int = 10) -> list[Chunk]:
         """Return up to `limit` papers for a given conference/year/round.
 

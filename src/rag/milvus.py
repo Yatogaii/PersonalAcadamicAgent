@@ -113,21 +113,21 @@ class MilvusProvider(RAG):
                 index_name="doc_vector_index",
                 params={"nlist": 1024},
             )
-            index_params.add_index(
-                field_name=self.conference_name_field,
-                index_type="FLAT",
-                index_name="conference_name_index",
-            )
-            index_params.add_index(
-                field_name=self.conference_year_field,
-                index_type="FLAT",
-                index_name="conference_year_index",
-            )
-            index_params.add_index(
-                field_name=self.conference_round_field,
-                index_type="FLAT",
-                index_name="conference_round_index",
-            )
+#            index_params.add_index(
+#                field_name=self.conference_name_field,
+#                index_type="FLAT",
+#                index_name="conference_name_index",
+#            )
+#            index_params.add_index(
+#                field_name=self.conference_year_field,
+#                index_type="FLAT",
+#                index_name="conference_year_index",
+#            )
+#            index_params.add_index(
+#                field_name=self.conference_round_field,
+#                index_type="FLAT",
+#                index_name="conference_round_index",
+#            )
 
             self.client.create_collection(
                 collection_name=collection_name,
@@ -218,6 +218,22 @@ class MilvusProvider(RAG):
             limit=1
         )
         return len(results) > 0
+
+    def get_existing_rounds(self, conference_name: str, year: int) -> list[str]:
+        """Get list of rounds that already exist for a conference and year."""
+        query = f'{self.conference_name_field} == "{conference_name}" && {self.conference_year_field} == {year}'
+        results = self.client.query(
+            collection_name=self.doc_collection,
+            filter=query,
+            output_fields=[self.conference_round_field],
+            limit=1000  # Fetch enough to cover all rounds
+        )
+        rounds = set()
+        for res in results:
+            r = res.get(self.conference_round_field)
+            if r:
+                rounds.add(r)
+        return list(rounds)
 
     def get_conference_papers(self, conference_name: str, year: int, round: str, limit: int = 10) -> list[Chunk]:
         """Fetch up to `limit` papers for a given conference/year/round from Milvus.
