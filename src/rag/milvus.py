@@ -159,9 +159,26 @@ class MilvusProvider(RAG):
             )
 
     def query_relevant_documents(self, query: str):
-        raise NotImplementedError("MilvusProvider.query_relevant_documents not implemented yet.")
+        res = [] 
+        # Just return an basic search result for now.
+        # Use two level search
+        milvus_res = self.client.search(
+                                        collection_name=settings.milvus_doc_collection,
+                                        data=[self.embedding_client.embed_query(query)],
+                                        output_fields=[
+                                            settings.milvus_title_field,
+                                            settings.milvus_abstract_field,
+                                            settings.milvus_doc_id_field
+                                        ])
+        for each_entity in milvus_res[0]:
+            res.append({
+                "title": each_entity[settings.milvus_title_field],
+                "abstract": each_entity[settings.milvus_abstract_field],
+                "doc_id": each_entity[settings.milvus_doc_id_field],
+            })
 
-        
+        return res
+
     # Initially insert one paper to database.
     def insert_document(self, title: str, abstract: str, url: str = '', conference_name: str='', conference_year: int=0, conference_round: str='all'):
         '''
