@@ -22,34 +22,38 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 SAVED_HTML_DIR: Path = PROJECT_ROOT / "saved_html_content"
 HTML_SELECTORS_DIR: Path = PROJECT_ROOT / "html_selectors"
 @tool
-def whether_conference_exists(conference, year, round):
-    """
-    Check wether an conference with given year and round already exsits in database.
-    """
-    rag_client = get_rag_client_by_provider(settings.rag_provider)
-    res= rag_client.check_conference_exists(conference, year, round)
-    logging.info(f"Checked existence for conference: {conference}, year: {year}, round: {round}, result: {res}")
-
-    return res
-@tool
-def get_parsed_html(url: str, conference: str) -> str:
+def get_parsed_html(url: str, conference: str, year: int, round: str) -> str:
     '''
     Parse a webpage, save the parsed content JSON, and return the absolute path.
+    Checks if the conference data already exists in the DB before parsing.
 
     Args:
         url: the URL of the webpage.
-        conference: the short name of the conference, becomes the filename.
+        conference: the short name of the conference (acronym).
+        year: the year of the conference (e.g. 2025).
+        round: the round of the conference (e.g. 'fall', 'cycle1').
     Return:
-        Absolute path (string) to saved parsed content JSON file.
+        Absolute path (string) to saved parsed content JSON file, or a message if skipped.
     '''
+    # Check existence
+    rag_client = get_rag_client_by_provider(settings.rag_provider)
+    if rag_client.check_conference_exists(conference, year, round):
+        logging.info(f"Conference {conference} {year} {round} already exists. Skipping.")
+        return f"Conference {conference} {year} {round} already exists. Skipping."
+
     logging.info(f"Getting parsed HTML content for URL: {url}, conference name:{conference}")
+    
+    # Generate filename: {conference}_{yy}_{round}
+    yy = str(year)[-2:]
+    filename_base = f"{conference}_{yy}_{round}"
+    
     SAVED_HTML_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = SAVED_HTML_DIR / f"{conference}.json"
+    file_path = SAVED_HTML_DIR / f"{filename_base}.json"
     if file_path.exists():
         logging.info(f"Cached parsed HTML content for URL: {url}, conference name:{conference}")
         return str(file_path.resolve())
 
-    selectors_obj = get_or_write_html_selector(url, conference)
+    selectors_obj = get_or_write_html_selector(url, filename_base)
     selectors_json = selectors_obj.model_dump_json()
     parsed_content = get_parsed_content_by_selector(url, selectors_json)
     file_path.write_text(parsed_content, encoding='utf-8')
@@ -135,7 +139,7 @@ def invoke_collector(conference_name: str, year: int, round: str="all") -> List[
     """Invoke collector agent and return list of parsed content file paths."""
     collector_agent = create_agent(
         model=init_kimi_k2(),
-        tools=[search_by_ddg, get_parsed_html, whether_conference_exists],
+        tools=[search_by_ddg, get_parsed_html],
     )
     msgs = apply_prompt_template("collector", {
         "conference_name": conference_name,
@@ -158,12 +162,24 @@ def invoke_collector(conference_name: str, year: int, round: str="all") -> List[
         if not path.exists():
             logging.warning(f"Parsed content file does not exist: {path}")
             continue
+
+        # Extract round from filename to use the actual found round instead of the requested one
+        # Filename format is expected to be: {acronym}_{yy}_{round}
+        actual_round = round
+        try:
+            parts = path.stem.split('_')
+            if len(parts) >= 3 and parts[-2].isdigit() and len(parts[-2]) == 2:
+                actual_round = parts[-1]
+                logging.info(f"Using extracted round '{actual_round}' from file {path.name}")
+        except Exception:
+            pass
+
         with open(path, 'r', encoding='utf-8') as f:
             papers = json.load(f)
             for paper in papers:
                 title = paper.get('title', '')
                 abstract = paper.get('abstract', '')
                 url = paper.get('url', '')
-                rag_client.insert_document(title=title, abstract=abstract, url=url, conference_name=conference_name, conference_year=year, conference_round=round)
+                rag_client.insert_document(title=title, abstract=abstract, url=url, conference_name=conference_name, conference_year=year, conference_round=actual_round)
     
     return paths
