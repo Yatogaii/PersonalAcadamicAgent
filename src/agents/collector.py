@@ -22,6 +22,16 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 SAVED_HTML_DIR: Path = PROJECT_ROOT / "saved_html_content"
 HTML_SELECTORS_DIR: Path = PROJECT_ROOT / "html_selectors"
 @tool
+def whether_conference_exists(conference, year, round):
+    """
+    Check wether an conference with given year and round already exsits in database.
+    """
+    rag_client = get_rag_client_by_provider(settings.rag_provider)
+    res= rag_client.check_conference_exists(conference, year, round)
+    logging.info(f"Checked existence for conference: {conference}, year: {year}, round: {round}, result: {res}")
+
+    return res
+@tool
 def get_parsed_html(url: str, conference: str) -> str:
     '''
     Parse a webpage, save the parsed content JSON, and return the absolute path.
@@ -43,7 +53,7 @@ def get_parsed_html(url: str, conference: str) -> str:
     selectors_json = selectors_obj.model_dump_json()
     parsed_content = get_parsed_content_by_selector(url, selectors_json)
     file_path.write_text(parsed_content, encoding='utf-8')
-    return str(file_path.resolve())
+    return f"Paper of {conference} collect complete! Json Path: {str(file_path.resolve())}"
 
 @tool
 def search_by_ddg(topic: str):
@@ -125,7 +135,7 @@ def invoke_collector(conference_name: str, year: int, round: str="all") -> List[
     """Invoke collector agent and return list of parsed content file paths."""
     collector_agent = create_agent(
         model=init_kimi_k2(),
-        tools=[search_by_ddg, get_parsed_html],
+        tools=[search_by_ddg, get_parsed_html, whether_conference_exists],
     )
     msgs = apply_prompt_template("collector", {
         "conference_name": conference_name,
