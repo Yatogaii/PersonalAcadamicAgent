@@ -192,7 +192,7 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
     paths = _extract_paths_from_final_json(extract_json_from_codeblock(content_text))
     if not paths:
         logger.warning(f"No parsed_paths JSON found in agent output. Raw content: {content_text[:500]}")
-        raise RuntimeError("Collector agent failed to produce parsed paths.")
+        return []
 
     # Insert all papers to RAG.
     rag_client = get_rag_client_by_provider(settings.rag_provider)

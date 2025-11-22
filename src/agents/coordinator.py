@@ -31,6 +31,8 @@ def handoff_to_collector(conference_name: str, year: int, round: str) -> list[st
     res = []
 
     json_paths = invoke_collector(conference_name, year, round)
+    if len(json_paths) == 0:
+        return ["No new papers collected, maybe indicating all papers already exist in the database."]
     logger.success(f"Collector Agent finished. Processing collected data from JSON files. Paths: {json_paths}")
 
     for json_path in json_paths:
