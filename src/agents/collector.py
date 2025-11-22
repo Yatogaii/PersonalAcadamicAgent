@@ -21,7 +21,6 @@ import os
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 SAVED_HTML_DIR: Path = PROJECT_ROOT / "saved_html_content"
 HTML_SELECTORS_DIR: Path = PROJECT_ROOT / "html_selectors"
-@tool
 def get_existing_rounds_from_db(conference: str, year: int) -> List[str]:
     """
     Check which rounds of a conference are already in the database.
@@ -57,7 +56,7 @@ def get_parsed_html(url: str, conference: str, year: int, round: str) -> str:
         logging.info(f"Conference {conference} {year} {round} already exists. Skipping.")
         return f"Conference {conference} {year} {round} already exists. Skipping."
 
-    logging.info(f"Getting parsed HTML content for URL: {url}, conference name:{conference}")
+    logging.info(f"Getting parsed HTML content for URL: {url}, conference name:{conference}, name:{year}, round:{round}")
     
     # Generate filename: {conference}_{yy}_{round}
     yy = str(year)[-2:]
@@ -72,6 +71,9 @@ def get_parsed_html(url: str, conference: str, year: int, round: str) -> str:
     selectors_obj = get_or_write_html_selector(url, filename_base)
     selectors_json = selectors_obj.model_dump_json()
     parsed_content = get_parsed_content_by_selector(url, selectors_json)
+    if parsed_content == "":
+        logging.error(f"Failed to parse content for URL: {url}")
+        return f"Failed to parse content for URL: {url}, maybe unfinished round yet."
     file_path.write_text(parsed_content, encoding='utf-8')
     return f"Paper of {conference} collect complete! Json Path: {str(file_path.resolve())}"
 
@@ -90,6 +92,19 @@ def search_by_ddg(topic: str):
         return list(DDGS().text(query=topic, region='us-en', safesearch='Off', time='y', max_results=10))
     except Exception as e:
         return {"error": str(e)}
+
+@tool
+def report_progress(message: str) -> str:
+    """
+    Emit a progress log for debugging/visibility.
+
+    Args:
+        message: Any short status summary to log.
+    Return:
+        Echoes the message back for the transcript.
+    """
+    logging.info(f"[CollectorProgress] {message}")
+    return message
     
 def get_or_write_html_selector(url: str, conference: str) -> HTMLSelector:
     '''
@@ -151,11 +166,14 @@ def _extract_paths_from_final_json(text: str) -> List[Path]:
         return [Path(p) for p in payload['parsed_paths']]
     return []
 
-def invoke_collector(conference_name: str, year: int, round: str="all") -> List[Path]:
-    """Invoke collector agent and return list of parsed content file paths."""
+def invoke_collector(conference_name: str, year: int, round: str="unspecified") -> List[Path]:
+    """
+    Invoke collector agent and return list of parsed content file paths.
+    round="unspecified" means the agent should discover available rounds itself.
+    """
     collector_agent = create_agent(
         model=init_kimi_k2(),
-        tools=[search_by_ddg, get_parsed_html, get_existing_rounds_from_db],
+        tools=[search_by_ddg, get_parsed_html, get_existing_rounds_from_db, report_progress],
     )
     msgs = apply_prompt_template("collector", {
         "conference_name": conference_name,

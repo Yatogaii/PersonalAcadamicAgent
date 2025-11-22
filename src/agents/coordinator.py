@@ -18,7 +18,7 @@ def need_clarification():
     return
 
 @tool
-def handoff_to_collector(conference_name: str, year: int, round: str="all") -> list[str]:
+def handoff_to_collector(conference_name: str, year: int, round: str) -> list[str]:
     """
     Param:
         conference_name: The name of the conference to collect papers from.
