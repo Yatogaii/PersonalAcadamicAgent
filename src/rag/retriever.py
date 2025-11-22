@@ -47,6 +47,9 @@ def get_rag_client_by_provider(provider: str) -> RAG:
         if provider == 'milvus':
             from .milvus import MilvusProvider
             _rag_clients[provider] = MilvusProvider()
+        elif provider == 'pgvector':
+            from .pgvector import PGVectorProvider
+            _rag_clients[provider] = PGVectorProvider()
         else:
             raise ValueError(f"Unsupported RAG provider: {provider}")
     return _rag_clients[provider]

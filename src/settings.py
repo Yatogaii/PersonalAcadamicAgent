@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     milvus_conference_year_field: str = "conference_year"
     milvus_conference_round_field: str = "conference_round"
 
+    # --- Postgres / PGVector ---
+    postgres_user: str = "postgres"
+    postgres_password: str = "password"
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "vectordb"
+    postgres_table_name: str = "papers"
+
     # --- Embedding model ---
     embedding_provider: str = "ollama"
     embedding_model: str = "qwen3-embedding:4b"
