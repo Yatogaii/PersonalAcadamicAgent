@@ -10,17 +10,19 @@ from rag.retriever import get_rag_client_by_provider
 from langchain.tools import tool
 from langchain.agents import create_agent
 from ddgs import DDGS
-import logging
 import json
 from typing import List
 
 from pathlib import Path
 import os
+from logging_config import logger
 
 # 项目根路径 (基于当前文件位置向上两级: src/agents -> src -> project root)
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 SAVED_HTML_DIR: Path = PROJECT_ROOT / "saved_html_content"
 HTML_SELECTORS_DIR: Path = PROJECT_ROOT / "html_selectors"
+
+@tool
 def get_existing_rounds_from_db(conference: str, year: int) -> List[str]:
     """
     Check which rounds of a conference are already in the database.
@@ -33,7 +35,7 @@ def get_existing_rounds_from_db(conference: str, year: int) -> List[str]:
     """
     rag_client = get_rag_client_by_provider(settings.rag_provider)
     rounds = rag_client.get_existing_rounds(conference, year)
-    logging.info(f"Checked existing rounds for {conference} {year}: {rounds}")
+    logger.success(f"Checked existing rounds for {conference} {year}: {rounds}")
     return rounds
 
 @tool
@@ -53,10 +55,10 @@ def get_parsed_html(url: str, conference: str, year: int, round: str) -> str:
     # Check existence
     rag_client = get_rag_client_by_provider(settings.rag_provider)
     if rag_client.check_conference_exists(conference, year, round):
-        logging.info(f"Conference {conference} {year} {round} already exists. Skipping.")
+        logger.success(f"Conference {conference} {year} {round} already exists. Skipping.")
         return f"Conference {conference} {year} {round} already exists. Skipping."
 
-    logging.info(f"Getting parsed HTML content for URL: {url}, conference name:{conference}, name:{year}, round:{round}")
+    logger.info(f"Getting parsed HTML content for URL: {url}, conference name:{conference}, name:{year}, round:{round}")
     
     # Generate filename: {conference}_{yy}_{round}
     yy = str(year)[-2:]
@@ -65,16 +67,17 @@ def get_parsed_html(url: str, conference: str, year: int, round: str) -> str:
     SAVED_HTML_DIR.mkdir(parents=True, exist_ok=True)
     file_path = SAVED_HTML_DIR / f"{filename_base}.json"
     if file_path.exists():
-        logging.info(f"Cached parsed HTML content for URL: {url}, conference name:{conference}")
+        logger.success(f"Cached parsed HTML content for URL: {url}, conference name:{conference}")
         return str(file_path.resolve())
 
     selectors_obj = get_or_write_html_selector(url, filename_base)
     selectors_json = selectors_obj.model_dump_json()
     parsed_content = get_parsed_content_by_selector(url, selectors_json)
     if parsed_content == "":
-        logging.error(f"Failed to parse content for URL: {url}")
+        logger.error(f"Failed to parse content for URL: {url}")
         return f"Failed to parse content for URL: {url}, maybe unfinished round yet."
     file_path.write_text(parsed_content, encoding='utf-8')
+    logger.success(f"Parsed content saved to {file_path.resolve()}")
     return f"Paper of {conference} collect complete! Json Path: {str(file_path.resolve())}"
 
 @tool
@@ -87,7 +90,7 @@ def search_by_ddg(topic: str):
     Return:
         List of search result dicts or an error dict.
     '''
-    logging.info(f"Searching DuckDuckGo for topic: {topic}")
+    logger.info(f"Searching DuckDuckGo for topic: {topic}")
     try:
         return list(DDGS().text(query=topic, region='us-en', safesearch='Off', time='y', max_results=10))
     except Exception as e:
@@ -103,7 +106,7 @@ def report_progress(message: str) -> str:
     Return:
         Echoes the message back for the transcript.
     """
-    logging.info(f"[CollectorProgress] {message}")
+    logger.success(f"[CollectorProgress] {message}")
     return message
     
 def get_or_write_html_selector(url: str, conference: str) -> HTMLSelector:
@@ -120,32 +123,33 @@ def get_or_write_html_selector(url: str, conference: str) -> HTMLSelector:
     HTML_SELECTORS_DIR.mkdir(parents=True, exist_ok=True)
     selector_file = HTML_SELECTORS_DIR / f"{selector_name}.json"
     if selector_file.exists():
-        logging.info(f"Using cached selectors for conference: {selector_name}")
+        logger.success(f"Using cached selectors for conference: {selector_name}")
         selectors_json = selector_file.read_text(encoding='utf-8')
         # Validate and parse to HTMLSelector using helper (handles str/dict/instances)
         try:
             selectors = to_html_selector(selectors_json)
             return selectors
         except Exception as e:
-            logging.error(f"Invalid selector file: {selector_file}, {e}")
+            logger.error(f"Invalid selector file: {selector_file}, {e}")
             exit(0)
     else:
-        logging.info(f"Generating selectors for conference: {selector_name}")
+        logger.info(f"Generating selectors for conference: {selector_name}")
         selectors = get_html_selector_by_llm(url)
 
         if not selectors:
-            logging.error(f"Failed to get selectors for URL: {url}")
+            logger.error(f"Failed to get selectors for URL: {url}")
             exit(0)
 
         # Ensure we have an HTMLSelector instance (LLM may return dict/str)
         try:
             selectors = to_html_selector(selectors)
         except Exception as e:
-            logging.error(f"Failed to convert LLM response to HTMLSelector: {e}")
+            logger.error(f"Failed to convert LLM response to HTMLSelector: {e}")
             exit(0)
 
         # Write to file
         selector_file.write_text(selectors.model_dump_json(), encoding='utf-8')
+        logger.success(f"Generated selectors for conference: {selector_name}")
         return selectors
 
 def _extract_paths_from_final_json(text: str) -> List[Path]:
@@ -187,14 +191,14 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
     content_text = extract_text_from_message_content(getattr(ai_msg["messages"][-1], "content", ai_msg["messages"][-1]))
     paths = _extract_paths_from_final_json(extract_json_from_codeblock(content_text))
     if not paths:
-        logging.warning(f"No parsed_paths JSON found in agent output. Raw content: {content_text[:500]}")
+        logger.warning(f"No parsed_paths JSON found in agent output. Raw content: {content_text[:500]}")
         raise RuntimeError("Collector agent failed to produce parsed paths.")
 
     # Insert all papers to RAG.
     rag_client = get_rag_client_by_provider(settings.rag_provider)
     for path in paths:
         if not path.exists():
-            logging.warning(f"Parsed content file does not exist: {path}")
+            logger.warning(f"Parsed content file does not exist: {path}")
             continue
 
         # Extract round from filename to use the actual found round instead of the requested one
@@ -204,7 +208,7 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
             parts = path.stem.split('_')
             if len(parts) >= 3 and parts[-2].isdigit() and len(parts[-2]) == 2:
                 actual_round = parts[-1]
-                logging.info(f"Using extracted round '{actual_round}' from file {path.name}")
+                logger.success(f"Using extracted round '{actual_round}' from file {path.name}")
         except Exception:
             pass
 

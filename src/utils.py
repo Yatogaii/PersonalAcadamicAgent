@@ -1,21 +1,22 @@
 import requests
-import logging
+from logging_config import logger
 
 from bs4 import BeautifulSoup
 from parser.HTMLSelector import HTMLSelector
 
 
 def get_html(url, filename):
-    logging.info(f"Getting HTML content for URL: {url}")
+    logger.info(f"Getting HTML content for URL: {url}")
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an error for bad status codes
         #print("Getted HTML content:", response.text)  # Print first 500 characters
         with open(f"htmls/{filename}", "w", encoding='utf-8') as f:
             f.write(response.text)
+        logger.success(f"Saved HTML content for {url} to htmls/{filename}")
         return True
     except Exception as e:
-        logging.error(f"Error getting HTML: {e}")
+        logger.error(f"Error getting HTML: {e}")
         return False
 
 
@@ -32,8 +33,8 @@ def get_parsed_content_by_selector(url: str, selectors: str):
     '''
     tmp_file = "temp_html.html"
     if not get_html(url, tmp_file):
-        logging.info(f"Failed to get HTML content for URL: {url}")
-        exit(0)
+        logger.warning(f"Failed to get HTML content for URL: {url}")
+        return ""
     
     # Read the HTML file
     with open(f'htmls/{tmp_file}', 'r', encoding='utf-8') as f:
@@ -58,7 +59,7 @@ def get_parsed_content_by_selector(url: str, selectors: str):
         
         if paper_containers:
             # Extract from each paper container separately
-            logging.info(f"Found {len(paper_containers)} paper containers")
+            logger.success(f"Found {len(paper_containers)} paper containers")
             for paper_elem in paper_containers:
                 # Extract title from this paper
                 title_elem = paper_elem.select_one(selector_dict['title'])
@@ -75,8 +76,8 @@ def get_parsed_content_by_selector(url: str, selectors: str):
                     })
         else:
             # Fallback: if no paper containers found, try global selection
-            logging.info("Warning: No paper containers found, falling back to global selection")
-            logging.info("This may cause title/abstract mismatch if papers have multiple abstract paragraphs")
+            logger.warning("No paper containers found, falling back to global selection")
+            logger.warning("This may cause title/abstract mismatch if papers have multiple abstract paragraphs")
             
             titles = [elem.get_text(strip=True) for elem in soup.select(selector_dict['title'])]
             abstract_elems = soup.select(selector_dict['abstract'])
@@ -170,4 +171,3 @@ def extract_json_from_codeblock(s: str) -> str:
             return inner
 
     raise ValueError('No valid JSON found and no ```json``` code block present')
-

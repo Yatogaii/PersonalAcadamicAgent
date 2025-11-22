@@ -10,7 +10,7 @@ from settings import settings
 
 from utils import extract_text_from_message_content
 import json
-import logging
+from logging_config import logger
 
 @tool
 def need_clarification():
@@ -27,11 +27,11 @@ def handoff_to_collector(conference_name: str, year: int, round: str) -> list[st
     Return:
         The random 10 paper titles and abstract collected.
     """
-    logging.info(f"Invoking Collector Agent for conference: {conference_name}, year: {year}, round: {round}")
+    logger.success(f"Invoking Collector Agent for conference: {conference_name}, year: {year}, round: {round}")
     res = []
 
     json_paths = invoke_collector(conference_name, year, round)
-    logging.info(f"Collector Agent finished. Processing collected data from JSON files. Paths: {json_paths}")
+    logger.success(f"Collector Agent finished. Processing collected data from JSON files. Paths: {json_paths}")
 
     for json_path in json_paths:
         if not json_path.exists():

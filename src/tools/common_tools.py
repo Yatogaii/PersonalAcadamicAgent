@@ -1,7 +1,7 @@
 from langchain.tools import tool
 from utils import get_html
 
-import logging
+from logging_config import logger
 
 
 @tool
@@ -16,5 +16,5 @@ def get_raw_html_content(url: str, filename: str) -> bool:
     Return:
         Success of Failed.
     '''
-    logging.info(f"Getting raw HTML content for URL: {url} and saving to file: {filename}")
+    logger.info(f"Getting raw HTML content for URL: {url} and saving to file: {filename}")
     return get_html(url, filename)

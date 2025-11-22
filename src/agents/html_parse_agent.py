@@ -22,7 +22,7 @@ from tools.common_tools import get_raw_html_content
 from prompts.template import apply_prompt_template
 from utils import extract_text_from_message_content, extract_json_from_codeblock
 
-import logging
+from logging_config import logger
 
 @tool
 def bash_exec(cmd:str) -> str:
@@ -34,7 +34,7 @@ def bash_exec(cmd:str) -> str:
     Return:
         the output of the command.
     '''
-    logging.info(f"Executing bash command: {cmd}")
+    logger.info(f"Executing bash command: {cmd}")
     try:
         output = os.popen(cmd).read()
         return output
@@ -54,7 +54,7 @@ def read_file(filename: str, offset: int, chunk_size: int) -> str:
     Returns:
         The content read from the file (line-based).
     '''
-    logging.info(f'Reading file: {filename} from line: {offset} with {chunk_size} lines')
+    logger.info(f"Reading file: {filename} from line: {offset} with {chunk_size} lines")
     try:
         with open(f"htmls/{filename}", "r", encoding='utf-8') as f:
             lines = f.readlines()

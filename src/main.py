@@ -5,16 +5,12 @@ from prompts.template import apply_prompt_template
 from dotenv import load_dotenv
 from settings import settings
 
-import logging
 import pprint
 
 try:
     load_dotenv()
 except Exception as e:
     exit(0)
-    
-logging.basicConfig(level=logging.INFO)
-
     
 enable_clarification = False
 MAX_CLARIFICATION_ROUNDS = 3
@@ -42,6 +38,5 @@ def workflow(user_input:str):
 
 
 if __name__ == "__main__":
-    user_input = 'Get accepted paper in USENIX Security 2024 Summer'
+    user_input = 'Get accepted paper in USENIX Security 2025'
     workflow(user_input)
-
