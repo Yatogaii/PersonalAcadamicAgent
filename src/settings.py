@@ -12,23 +12,22 @@ class Settings(BaseSettings):
     rag_provider: str = "milvus"
 
     # --- Milvus / vectorstore ---
-    milvus_uri: str = "./milvus_lite.db"
-    milvus_user: str = "default"
-    milvus_password: str = "123456"
-    milvus_doc_collection: str = "documents"
-    milvus_chunk_collection: str = "documents_chunks"
+    milvus_uri: str = "http://localhost:19530" # Default to standalone, can be file path for lite
+    milvus_token: str = "" # For standalone authentication
+    milvus_collection: str = "papers" # Unified collection
     milvus_top_k: int = 10
 
     milvus_id_field: str = "id"
     milvus_doc_id_field: str = "doc_id"
-    milvus_doc_vector_field: str = "doc_vectors"
+    milvus_vector_field: str = "vectors" # Unified vector field
+    milvus_text_field: str = "text" # Unified text field (abstract or content)
     milvus_title_field: str = "title"
-    milvus_abstract_field: str = "abstract"
-    milvus_content_field: str = "content"
     milvus_url_field: str = "url"
     milvus_chunk_id_field: str = "chunk_id"
-    milvus_vector_field: str = "vectors"
     milvus_vector_index_metric_type: str = "L2"
+    milvus_index_type: str = "FLAT"
+    milvus_index_params: dict = {"nlist": 1024}
+    milvus_search_params: dict = {"nprobe": 10}
     milvus_conference_name_field: str = "conference_name"
     milvus_conference_year_field: str = "conference_year"
     milvus_conference_round_field: str = "conference_round"
