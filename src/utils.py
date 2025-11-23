@@ -22,6 +22,7 @@ def get_html(url, filename):
 
 import json
 import re
+from urllib.parse import urljoin
 
 def get_parsed_content_by_selector(url: str, selectors: str):
     '''
@@ -69,10 +70,21 @@ def get_parsed_content_by_selector(url: str, selectors: str):
                 abstract_elems = paper_elem.select(selector_dict['abstract'])
                 abstract = ' '.join([elem.get_text(strip=True) for elem in abstract_elems]) if abstract_elems else ""
                 
+                # Extract link
+                link = ""
+                if 'link' in selector_dict and selector_dict['link']:
+                    link_elem = paper_elem.select_one(selector_dict['link'])
+                    if link_elem and link_elem.has_attr('href'):
+                        href = link_elem['href']
+                        if isinstance(href, list):
+                            href = href[0]
+                        link = urljoin(url, href)
+
                 if title or abstract:  # Only add if we found something
                     papers.append({
                         'title': title,
-                        'abstract': abstract
+                        'abstract': abstract,
+                        'url': link
                     })
         else:
             # Fallback: if no paper containers found, try global selection
@@ -93,9 +105,21 @@ def get_parsed_content_by_selector(url: str, selectors: str):
                     abstract_texts = [elem.get_text(strip=True) for elem in abstract_elems[start_idx:end_idx]]
                     abstract = ' '.join(abstract_texts)
                     
+                    # Try to find links if selector exists
+                    link = ""
+                    if 'link' in selector_dict and selector_dict['link']:
+                        # This is tricky for global selection. We assume links match titles count.
+                        link_elems = soup.select(selector_dict['link'])
+                        if i < len(link_elems) and link_elems[i].has_attr('href'):
+                            href = link_elems[i]['href']
+                            if isinstance(href, list):
+                                href = href[0]
+                            link = urljoin(url, href)
+
                     papers.append({
                         'title': title,
-                        'abstract': abstract
+                        'abstract': abstract,
+                        'url': link
                     })
         
         return json.dumps(papers, ensure_ascii=False, indent=2)
@@ -171,3 +195,36 @@ def extract_json_from_codeblock(s: str) -> str:
             return inner
 
     raise ValueError('No valid JSON found and no ```json``` code block present')
+
+def get_details_from_html(url: str, selector: HTMLSelector) -> dict:
+    '''
+    Parse the html and extract the PDF link and abstract.
+    '''
+    tmp_file = "temp_detail.html"
+    if not get_html(url, tmp_file):
+        return {}
+    
+    with open(f'htmls/{tmp_file}', 'r', encoding='utf-8') as f:
+        html_content = f.read()
+        
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    result = {}
+    
+    # Extract PDF link
+    if selector.pdf_link:
+        link_elem = soup.select_one(selector.pdf_link)
+        if link_elem and link_elem.has_attr('href'):
+            href = link_elem['href']
+            if isinstance(href, list):
+                href = href[0]
+            result['pdf_url'] = urljoin(url, href)
+
+    # Extract Abstract
+    if selector.abstract:
+        abstract_elems = soup.select(selector.abstract)
+        abstract = ' '.join([elem.get_text(strip=True) for elem in abstract_elems]) if abstract_elems else ""
+        if abstract:
+            result['abstract'] = abstract
+            
+    return result

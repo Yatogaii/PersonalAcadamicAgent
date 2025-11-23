@@ -6,6 +6,8 @@ import json
 class HTMLSelector(BaseModel):
     title: str = Field(description="Css Selector of the paper title")
     abstract: str = Field(description="Css Selector of the paper abstract")
+    link: str = Field(description="Css Selector of the paper detail page link", default="")
+    pdf_link: str = Field(description="Css Selector of the paper pdf link", default="")
 
 
 def to_html_selector(obj: Any) -> HTMLSelector:

@@ -1,7 +1,7 @@
 from models import init_kimi_k2
 from prompts.template import apply_prompt_template
 from settings import settings
-from utils import get_parsed_content_by_selector
+from utils import get_parsed_content_by_selector, get_details_from_html
 from parser.HTMLSelector import HTMLSelector, to_html_selector
 from agents.html_parse_agent import get_html_selector_by_llm
 from utils import extract_text_from_message_content, extract_json_from_codeblock
@@ -97,6 +97,68 @@ def search_by_ddg(topic: str):
         return {"error": str(e)}
 
 @tool
+def enrich_papers_with_details(json_path: str, conference: str) -> str:
+    """
+    For each paper in the JSON file, visit its detail URL (if present).
+    Extract the PDF link.
+    If the abstract is missing, extract the abstract from the detail page.
+    Update the JSON file.
+    
+    Args:
+        json_path: Path to the JSON file containing papers.
+        conference: Conference name (used for caching selectors).
+    """
+    path = Path(json_path)
+    if not path.exists():
+        return f"File not found: {json_path}"
+        
+    try:
+        papers = json.loads(path.read_text(encoding='utf-8'))
+    except Exception as e:
+        return f"Failed to load JSON: {e}"
+        
+    updated_count = 0
+    detail_selector = None
+    
+    logger.info(f"Enriching papers in {json_path} with details (PDF, Abstract)")
+    
+    for paper in papers:
+        detail_url = paper.get('url')
+        if not detail_url:
+            continue
+            
+        if not detail_selector:
+            try:
+                detail_selector = get_or_write_html_selector(detail_url, conference, "detail")
+            except Exception as e:
+                logger.error(f"Failed to get detail selector: {e}")
+                continue
+        
+        try:
+            details = get_details_from_html(detail_url, detail_selector)
+            
+            changed = False
+            if 'pdf_url' in details:
+                paper['pdf_url'] = details['pdf_url']
+                changed = True
+                logger.info(f"Found PDF link for {paper.get('title', 'unknown')}: {details['pdf_url']}")
+            
+            if not paper.get('abstract') and 'abstract' in details:
+                paper['abstract'] = details['abstract']
+                changed = True
+                logger.info(f"Found missing abstract for {paper.get('title', 'unknown')}")
+                
+            if changed:
+                updated_count += 1
+                
+        except Exception as e:
+            logger.error(f"Error getting details for {detail_url}: {e}")
+            
+    path.write_text(json.dumps(papers, ensure_ascii=False, indent=2), encoding='utf-8')
+    logger.success(f"Updated {updated_count} papers with details.")
+    return f"Updated {updated_count} papers with details."
+
+@tool
 def report_progress(message: str) -> str:
     """
     Emit a progress log for debugging/visibility.
@@ -109,7 +171,7 @@ def report_progress(message: str) -> str:
     logger.success(f"[CollectorProgress] {message}")
     return message
     
-def get_or_write_html_selector(url: str, conference: str) -> HTMLSelector:
+def get_or_write_html_selector(url: str, conference: str, selector_suffix: str = "") -> HTMLSelector:
     '''
     Parse the html and extract all the text inside specific tags.
     Tags file always in "html_selectors/{conference}.json".
@@ -117,9 +179,13 @@ def get_or_write_html_selector(url: str, conference: str) -> HTMLSelector:
     Args:
         url: the URL of the webpage.
         conference: the name of the conference.
+        selector_suffix: suffix for the selector filename (e.g. "detail").
     '''
     # We assume all selectors for one conference are same.
     selector_name = conference.split('_')[0]
+    if selector_suffix:
+        selector_name = f"{selector_name}_{selector_suffix}"
+    
     HTML_SELECTORS_DIR.mkdir(parents=True, exist_ok=True)
     selector_file = HTML_SELECTORS_DIR / f"{selector_name}.json"
     if selector_file.exists():
@@ -177,7 +243,7 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
     """
     collector_agent = create_agent(
         model=init_kimi_k2(),
-        tools=[search_by_ddg, get_parsed_html, get_existing_rounds_from_db, report_progress],
+        tools=[search_by_ddg, get_parsed_html, get_existing_rounds_from_db, report_progress, enrich_papers_with_details],
     )
     msgs = apply_prompt_template("collector", {
         "conference_name": conference_name,
@@ -218,6 +284,8 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
                 title = paper.get('title', '')
                 abstract = paper.get('abstract', '')
                 url = paper.get('url', '')
-                rag_client.insert_document(title=title, abstract=abstract, url=url, conference_name=conference_name, conference_year=year, conference_round=actual_round)
+                pdf_url = paper.get('pdf_url', '')
+                final_url = pdf_url if pdf_url else url
+                rag_client.insert_document(title=title, abstract=abstract, url=final_url, conference_name=conference_name, conference_year=year, conference_round=actual_round)
     
     return paths

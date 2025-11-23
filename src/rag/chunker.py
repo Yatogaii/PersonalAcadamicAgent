@@ -1,4 +1,5 @@
 from settings import settings
+from models import init_chat_model_from_modelscope
 
 class Chunker:
     def __init__(self):
@@ -30,4 +31,6 @@ class Chunker:
         return [sentence for para in paras if para.strip() for sentence in para.split('.') if sentence.strip()]
         
     def _chunk_by_contextual(self, text: str) -> list[str]:
-        raise NotImplementedError("Contextual chunking not implemented yet.")
+        context_model = init_chat_model_from_modelscope("deepseek-ai/DeepSeek-V3.2-Exp")
+
+        return []

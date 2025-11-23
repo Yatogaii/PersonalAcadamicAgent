@@ -80,6 +80,11 @@ Follow this order strictly.
     - `round`: extracted/confirmed round (`fall`, `cycle1`, `one`, etc.).
 - Use `report_progress` to log chosen URL for each round and the result of parsing.
 
+## Step 5: Enrich Papers with Details
+- For each newly parsed file (returned by `get_parsed_html`):
+  - Call `enrich_papers_with_details(json_path, conference)` to fetch PDF links and missing abstracts for all papers in that file.
+  - This step is crucial for getting the actual content and ensuring complete metadata.
+
 # 4. Final Output (JSON Only)
 - After printing the summary, return a single JSON object containing only the **newly processed** data.
 - If the tool returns a message saying the conference exists, **DO NOT** include it in `parsed_paths`.

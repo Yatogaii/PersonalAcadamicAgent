@@ -19,6 +19,8 @@ This ensures that if a paper has multiple abstract paragraphs, they all belong t
 Generate CSS selectors for:
 - "title": Selector to find the title WITHIN a paper container
 - "abstract": Selector to find abstract paragraph(s) WITHIN a paper container
+- "link": Selector to find the detail page URL WITHIN a paper container (usually the same as title's <a> tag)
+- "pdf_link": Selector to find the PDF link (if this is a detail page)
 
 # AVAILABLE TOOLS:
 1. get_raw_html_content(url, filename) -> bool
@@ -60,20 +62,40 @@ Ask yourself:
 - Will they find 50-300 papers (typical conference size)?
 
 # OUTPUT FORMAT(JSON only):
-Your response MUST be a JSON with exactly these two fields:
+Your response MUST be a JSON with exactly these fields (some are optional depending on the page type):
 {
-  "title": "CSS selector for title",
-  "abstract": "CSS selector for abstract paragraphs"
+  "title": "CSS selector for title (Required)",
+  "abstract": "CSS selector for abstract paragraphs (Required for list pages)",
+  "link": "CSS selector for the detail page URL (Optional, for list pages)",
+  "pdf_link": "CSS selector for the PDF download link (Optional, for detail pages)"
 }
 
 **CRITICAL**: As the final answer, output ONLY a single JSON object with this exact structure.
 
 ## EXAMPLES:
-Good selectors:
+Good selectors for a list page:
 {
   "title": "h2 a",
-  "abstract": "div.field-name-field-paper-description-long p"
+  "abstract": "div.field-name-field-paper-description-long p",
+  "link": "h2 a"
 }
+
+Good selectors for a detail page:
+Good selectors for a detail page:
+{
+  "title": "h1.title",
+  "abstract": "div.abstract",
+  "pdf_link": "span.file a"
+}
+
+# IMPORTANT REMINDERS:
+- Be EFFICIENT! Read only 100-300 lines to analyze structure
+- Focus on the REPEATING PATTERN of papers
+- Selectors will be used WITHIN each paper container (handled by the extraction code)
+- Multiple <p> tags in abstract are OK - they'll be joined automatically
+- Stop once you identify the pattern - don't over-analyze
+- **For detail pages**: Ensure you find the abstract selector if it exists, as it might be missing from the list page.
+
 
 {
   "title": "h1.paper-title",
