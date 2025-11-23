@@ -187,7 +187,7 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
 
     msgs.append({"role": "user", "content": f"""Collect papers for conference {conference_name} {year} {round}."""})
     
-    ai_msg = collector_agent.invoke(input={"messages": msgs})
+    ai_msg = collector_agent.invoke(input={"messages": msgs},config={"recursion_limit": 100},)
     content_text = extract_text_from_message_content(getattr(ai_msg["messages"][-1], "content", ai_msg["messages"][-1]))
     paths = _extract_paths_from_final_json(extract_json_from_codeblock(content_text))
     if not paths:
