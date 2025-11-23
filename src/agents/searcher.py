@@ -1,3 +1,69 @@
-# TODO
+from typing import Any, Dict, List
 
-from models import init_kimi_k2
+from logging_config import logger
+from rag.retriever import get_rag_client_by_provider
+from settings import settings
+
+
+class Searcher:
+    """RAG searcher that only retrieves and normalizes hits.
+
+    Generation is handled by the coordinator to keep output format consistent.
+    """
+
+    def __init__(self) -> None:
+        self.rag_client = get_rag_client_by_provider(settings.rag_provider)
+        self.top_k = settings.milvus_top_k
+
+    def search(self, query: str, k: int | None = None) -> List[Dict[str, Any]]:
+        """Query vector store and return normalized hits with ids."""
+        k = k or self.top_k
+        raw_hits = self.rag_client.query_relevant_documents(query)
+        hits: List[Dict[str, Any]] = []
+        for idx, hit in enumerate(raw_hits[:k]):
+            hits.append(
+                {
+                    "id": idx + 1,
+                    "title": hit.get("title", ""),
+                    "abstract": hit.get("abstract", ""),
+                    "url": hit.get("url", ""),
+                    "doc_id": hit.get("doc_id", ""),
+                    "score": hit.get("score", 0.0),
+                    "conference_name": hit.get("conference_name", ""),
+                    "conference_year": hit.get("conference_year", ""),
+                    "conference_round": hit.get("conference_round", ""),
+                }
+            )
+        logger.info(f"Searcher retrieved {len(hits)} hits for query: {query}")
+        return hits
+
+    def format_hits(self, hits: List[Dict[str, Any]], max_len: int = 600) -> str:
+        """Helper for coordinator: render hits into concise numbered blocks."""
+        if not hits:
+            return "No relevant documents found."
+        blocks = []
+        for h in hits:
+            meta_parts = []
+            if h.get("conference_name"):
+                meta_parts.append(str(h["conference_name"]))
+            if h.get("conference_year"):
+                meta_parts.append(str(h["conference_year"]))
+            if h.get("conference_round"):
+                meta_parts.append(str(h["conference_round"]))
+            meta = " | ".join(meta_parts)
+            abstract = h.get("abstract", "")
+            if len(abstract) > max_len:
+                abstract = abstract[:max_len] + "..."
+            blocks.append(
+                f"[{h['id']}] {h.get('title') or 'Untitled'}\n"
+                f"{meta + '\\n' if meta else ''}"
+                f"URL: {h.get('url') or 'N/A'}\n"
+                f"Abstract: {abstract}"
+            )
+        return "\n\n".join(blocks)
+
+
+def invoke_searcher(query: str, k: int | None = None) -> List[Dict[str, Any]]:
+    """Convenience wrapper used by coordinator/tools. Returns hits only."""
+    searcher = Searcher()
+    return searcher.search(query, k)

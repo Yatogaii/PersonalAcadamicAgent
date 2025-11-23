@@ -5,7 +5,7 @@ from langchain.messages import AIMessage
 from langchain.tools import tool
 
 from agents.collector import invoke_collector
-from rag.retriever import get_rag_client_by_provider
+from agents.searcher import Searcher
 from settings import settings
 
 from utils import extract_text_from_message_content
@@ -49,13 +49,27 @@ def handoff_to_collector(conference_name: str, year: int, round: str) -> list[st
 @tool
 def handoff_to_RAG(query: str):
     """
-    UNIMPLEMENTED for now.
     Param:
         query: The search query string.
     Return:
-        Enhanced Prompt with relevant documents retrieved from RAG searcher.
+        Retrieved RAG hits formatted for the coordinator to answer with citations.
     """
-    return
+    logger.info(f"Invoking RAG Searcher for query: {query}")
+    try:
+        searcher = Searcher()
+        hits = searcher.search(query)
+        formatted = searcher.format_hits(hits)
+        logger.success(f"RAG search completed with {len(hits)} hits.")
+        return {
+            "query": query,
+            "hits": hits,
+            "formatted_context": formatted
+        }
+    except Exception as e:
+        logger.error(f"RAG search failed: {e}")
+        return {
+            "error": f"RAG search failed: {e}"
+        }
 
 # Coordinator Agent
 # If need clarification, then return.
