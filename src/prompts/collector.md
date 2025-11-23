@@ -47,8 +47,10 @@ Follow this order strictly.
 
 ## Step 1: Discover Rounds & URLs (only when `round` is unspecified)
 - If the user did NOT provide a round:
-  - Call `search_by_ddg` with queries like "[Conference Name] [Year] accepted papers" or "[Conference Name] [Year] call for papers".
-  - Identify every valid round/cycle (e.g., Summer, Fall, Cycle 1, Cycle 2).
+  - **Perform ONE broad search** using `search_by_ddg` with the query: `"[Conference Name] [Year] accepted papers"`.
+  - **Analyze the results** to identify valid rounds/cycles (e.g., Summer, Fall, Cycle 1, Cycle 2).
+  - **DO NOT** guess rounds (like "Spring", "Summer", "Winter") and search for them individually. Only search for a specific round if you have evidence it exists from the broad search.
+  - If the broad search results are insufficient, you may try **one** additional search for `"[Conference Name] [Year] program"`.
   - For each discovered round, find the official **Accepted Papers** URL. Do not infer or fabricate URLs.
 - If the user provided a round, skip discovery and use that round only.
 - Use `report_progress` to log the discovered rounds and candidate URLs.
@@ -67,7 +69,8 @@ Follow this order strictly.
 
 ## Step 4: Search & Parse (missing rounds only)
 - For each round that still needs collection:
-  - Call `search_by_ddg` with "[Conference Name] [Year] [Round] accepted papers".
+  - If you already have a valid URL from Step 1, use it directly.
+  - If you need to find the URL for a *confirmed* round, call `search_by_ddg` with `"[Conference Name] [Year] [Round] accepted papers"`.
   - **CRITICAL**: DO NOT add terms like "technical sessions", "program", or "schedule" to your search query.
   - Pick the official accepted-papers URL (exclude program/schedule/workshops/homepages/technical reports). The URL/title must align with the target round; if the URL does not indicate the round (e.g., just the conference homepage), treat it as invalid and search again.
   - Call the URL parsing tool `get_parsed_html(url, conference, year, round)` with:

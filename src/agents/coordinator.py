@@ -59,7 +59,7 @@ def handoff_to_RAG(query: str):
         searcher = Searcher()
         hits = searcher.search(query)
         formatted = searcher.format_hits(hits)
-        logger.success(f"RAG search completed with {len(hits)} hits.")
+        logger.success(f"RAG search completed with {len(hits)} hits: {formatted}")
         return {
             "query": query,
             "hits": hits,

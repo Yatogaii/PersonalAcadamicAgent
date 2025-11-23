@@ -109,13 +109,19 @@ class MilvusProvider(RAG):
                                         output_fields=[
                                             self.title_field,
                                             self.text_field,
-                                            self.doc_id_field
+                                            self.doc_id_field,
+                                            self.conference_name_field,
+                                            self.conference_year_field,
+                                            self.conference_round_field,
                                         ])
         for each_entity in milvus_res[0]:
             res.append({
                 "title": each_entity[self.title_field],
                 "abstract": each_entity[self.text_field],
                 "doc_id": each_entity[self.doc_id_field],
+                "conference_name": each_entity[self.conference_name_field],
+                "conference_year": each_entity[self.conference_year_field],
+                "conference_round": each_entity[self.conference_round_field],
             })
 
         return res
