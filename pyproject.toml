@@ -21,4 +21,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.0.0",
     "sentence-transformers>=5.1.2",
+    "pdfplumber>=0.11.8",
+    "pypdf>=6.4.0",
+    "pymupdf>=1.26.6",
 ]
