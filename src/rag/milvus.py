@@ -27,6 +27,7 @@ class MilvusProvider(RAG):
         self.text_field: str = settings.milvus_text_field
         self.title_field: str = settings.milvus_title_field
         self.url_field: str = settings.milvus_url_field
+        self.pdf_url_field: str = settings.milvus_pdf_url_field
         self.conference_name_field: str = settings.milvus_conference_name_field
         self.conference_year_field: str = settings.milvus_conference_year_field
         self.conference_round_field: str = settings.milvus_conference_round_field
@@ -66,6 +67,7 @@ class MilvusProvider(RAG):
                 # Optional fields (nullable=True)
                 FieldSchema(name=self.title_field, dtype=DataType.VARCHAR, max_length=512, nullable=True),
                 FieldSchema(name=self.url_field, dtype=DataType.VARCHAR, max_length=2048, nullable=True),
+                FieldSchema(name=self.pdf_url_field, dtype=DataType.VARCHAR, max_length=2048, nullable=True),
                 FieldSchema(name=self.conference_name_field, dtype=DataType.VARCHAR, max_length=256, nullable=True),
                 FieldSchema(name=self.conference_year_field, dtype=DataType.INT64, nullable=True),
                 FieldSchema(name=self.conference_round_field, dtype=DataType.VARCHAR, max_length=64, nullable=True),
@@ -110,6 +112,8 @@ class MilvusProvider(RAG):
                                             self.title_field,
                                             self.text_field,
                                             self.doc_id_field,
+                                            self.url_field,
+                                            self.pdf_url_field,
                                             self.conference_name_field,
                                             self.conference_year_field,
                                             self.conference_round_field,
@@ -119,6 +123,8 @@ class MilvusProvider(RAG):
                 "title": each_entity[self.title_field],
                 "abstract": each_entity[self.text_field],
                 "doc_id": each_entity[self.doc_id_field],
+                "url": each_entity.get(self.url_field, ""),
+                "pdf_url": each_entity.get(self.pdf_url_field, ""),
                 "conference_name": each_entity[self.conference_name_field],
                 "conference_year": each_entity[self.conference_year_field],
                 "conference_round": each_entity[self.conference_round_field],
@@ -127,7 +133,7 @@ class MilvusProvider(RAG):
         return res
 
     # Initially insert one paper to database.
-    def insert_document(self, title: str, abstract: str, url: str = '', conference_name: str='', conference_year: int=0, conference_round: str='all'):
+    def insert_document(self, title: str, abstract: str, url: str = '', pdf_url: str = '', conference_name: str='', conference_year: int=0, conference_round: str='all'):
         '''
         We insert pdf vector to milvus lazily.
         For the first time we saw a pdf, we just insert title, abstract, url_of_pdf to database.
@@ -139,6 +145,7 @@ class MilvusProvider(RAG):
             self.title_field: title,
             self.text_field: abstract,
             self.url_field: url,
+            self.pdf_url_field: pdf_url,
             self.conference_name_field: conference_name,
             self.conference_year_field: conference_year,
             self.conference_round_field: conference_round,
@@ -195,6 +202,7 @@ class MilvusProvider(RAG):
                 self.title_field,
                 self.text_field,
                 self.url_field,
+                self.pdf_url_field,
             ],
             limit=limit,
         )
@@ -204,11 +212,13 @@ class MilvusProvider(RAG):
             title = r.get(self.title_field, "")
             abstract = r.get(self.text_field, "")
             url = r.get(self.url_field, "")
+            pdf_url = r.get(self.pdf_url_field, "")
             content = f"Title: {title}\nAbstract: {abstract}"
             metadata = {
                 "title": title,
                 "abstract": abstract,
                 "url": url,
+                "pdf_url": pdf_url,
                 "conference_name": conference_name,
                 "conference_year": year,
                 "conference_round": round,

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     milvus_text_field: str = "text" # Unified text field (abstract or content)
     milvus_title_field: str = "title"
     milvus_url_field: str = "url"
+    milvus_pdf_url_field: str = "pdf_url"
     milvus_chunk_id_field: str = "chunk_id"
     milvus_vector_index_metric_type: str = "L2"
     milvus_index_type: str = "FLAT"

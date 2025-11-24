@@ -13,7 +13,7 @@ class RAG(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def insert_document(self, title: str, abstract: str, url: str='', conference_name: str='', conference_year: int=0, conference_round: str='all'):
+    def insert_document(self, title: str, abstract: str, url: str='', pdf_url: str='', conference_name: str='', conference_year: int=0, conference_round: str='all'):
         raise NotImplementedError
 
     @abstractmethod

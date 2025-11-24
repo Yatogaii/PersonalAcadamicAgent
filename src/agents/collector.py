@@ -285,7 +285,6 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
                 abstract = paper.get('abstract', '')
                 url = paper.get('url', '')
                 pdf_url = paper.get('pdf_url', '')
-                final_url = pdf_url if pdf_url else url
-                rag_client.insert_document(title=title, abstract=abstract, url=final_url, conference_name=conference_name, conference_year=year, conference_round=actual_round)
+                rag_client.insert_document(title=title, abstract=abstract, url=url, pdf_url=pdf_url, conference_name=conference_name, conference_year=year, conference_round=actual_round)
     
     return paths
