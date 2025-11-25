@@ -40,6 +40,22 @@ class RAG(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def insert_paper_chunks(self, doc_id: str, chunks: list[dict], paper_title: str = ""):
+        """
+        Inserts parsed chunks into the vector store.
+        chunks: List of dicts with structure metadata (chunk_index, section_category, etc.)
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_context_window(self, doc_id: str, center_chunk_index: int, window_size: int = 1) -> str:
+        """
+        Retrieves the context window around a specific chunk.
+        Returns the concatenated text of chunks in [center - window, center + window].
+        """
+        raise NotImplementedError
+
 _rag_clients: dict[str, RAG] = {}
 
 def get_rag_client_by_provider(provider: str) -> RAG:

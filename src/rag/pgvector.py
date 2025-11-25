@@ -109,7 +109,7 @@ class PGVectorProvider(RAG):
             })
         return res
 
-    def insert_document(self, title: str, abstract: str, url: str='', conference_name: str='', conference_year: int=0, conference_round: str='all'):
+    def insert_document(self, title: str, abstract: str, url: str='', pdf_url: str='', conference_name: str='', conference_year: int=0, conference_round: str='all'):
         doc_vector = self.embedding_client.embed_query(f"Title: {title}\nAbstract: {abstract}")
         doc_id = str(uuid.uuid4())
         
@@ -182,3 +182,9 @@ class PGVectorProvider(RAG):
             chunks.append(Chunk(content=content, metadata=metadata, score=0.0))
             
         return chunks
+
+    def insert_paper_chunks(self, doc_id: str, chunks: list[dict], paper_title: str = ""):
+        raise NotImplementedError("Structure-aware RAG not yet implemented for PGVector")
+
+    def get_context_window(self, doc_id: str, center_chunk_index: int, window_size: int = 1) -> str:
+        raise NotImplementedError("Structure-aware RAG not yet implemented for PGVector")

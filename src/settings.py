@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     milvus_conference_name_field: str = "conference_name"
     milvus_conference_year_field: str = "conference_year"
     milvus_conference_round_field: str = "conference_round"
+    
+    # New fields for Structure-Aware RAG
+    # milvus_chunk_id_field is already defined above and will be used for sequential index
+    milvus_section_category_field: str = "section_category"
+    milvus_parent_section_field: str = "parent_section"
+    milvus_page_number_field: str = "page_number"
 
     # --- Postgres / PGVector ---
     postgres_user: str = "postgres"

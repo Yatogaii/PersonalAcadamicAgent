@@ -32,6 +32,12 @@ class MilvusProvider(RAG):
         self.conference_year_field: str = settings.milvus_conference_year_field
         self.conference_round_field: str = settings.milvus_conference_round_field
         self.chunk_id_field: str = settings.milvus_chunk_id_field
+        
+        # --- Structure-Aware RAG Fields ---
+        # self.chunk_id_field is used for the sequential index (0, 1, 2...)
+        self.section_category_field: str = settings.milvus_section_category_field
+        self.parent_section_field: str = settings.milvus_parent_section_field
+        self.page_number_field: str = settings.milvus_page_number_field
 
         # --- Vector index configuration ---
         self.vector_index_metric_type: str = settings.milvus_vector_index_metric_type
@@ -71,7 +77,12 @@ class MilvusProvider(RAG):
                 FieldSchema(name=self.conference_name_field, dtype=DataType.VARCHAR, max_length=256, nullable=True),
                 FieldSchema(name=self.conference_year_field, dtype=DataType.INT64, nullable=True),
                 FieldSchema(name=self.conference_round_field, dtype=DataType.VARCHAR, max_length=64, nullable=True),
-                FieldSchema(name=self.chunk_id_field, dtype=DataType.INT64, nullable=True),
+                
+                # Structure-Aware RAG Fields
+                FieldSchema(name=self.chunk_id_field, dtype=DataType.INT64, nullable=True), # Sequential index (-1 for paper level)
+                FieldSchema(name=self.section_category_field, dtype=DataType.INT64, nullable=True),
+                FieldSchema(name=self.parent_section_field, dtype=DataType.VARCHAR, max_length=512, nullable=True),
+                FieldSchema(name=self.page_number_field, dtype=DataType.INT64, nullable=True),
             ]
         )
 
@@ -133,14 +144,16 @@ class MilvusProvider(RAG):
         return res
 
     # Initially insert one paper to database.
-    def insert_document(self, title: str, abstract: str, url: str = '', pdf_url: str = '', conference_name: str='', conference_year: int=0, conference_round: str='all'):
+    def insert_document(self, title: str, abstract: str, url: str = '', pdf_url: str = '', conference_name: str='', conference_year: int=0, conference_round: str='all') -> str:
         '''
         We insert pdf vector to milvus lazily.
         For the first time we saw a pdf, we just insert title, abstract, url_of_pdf to database.
+        Returns the generated doc_id.
         '''
         doc_vector  = self.embedding_client.embed_query(f"Title: {title}\nAbstract: {abstract}")
+        doc_id = str(uuid4())
         data = {
-            self.doc_id_field: str(uuid4()),
+            self.doc_id_field: doc_id,
             self.vector_field: doc_vector,
             self.title_field: title,
             self.text_field: abstract,
@@ -149,12 +162,94 @@ class MilvusProvider(RAG):
             self.conference_name_field: conference_name,
             self.conference_year_field: conference_year,
             self.conference_round_field: conference_round,
+            # Set default values for structure fields for paper-level entry
+            self.chunk_id_field: -1,
+            self.section_category_field: 0, # Abstract category is 0
+            self.parent_section_field: "",
+            self.page_number_field: 1
         }
 
         self.client.insert(collection_name=self.collection, data=data)
+        return doc_id
     
-    def insert_document_content(self, doc_id, title, abstract, content): 
-        raise RuntimeError("Chunk strategy not implement yet!")
+    def insert_paper_chunks(self, doc_id: str, chunks: list[dict], paper_title: str = ""):
+        """
+        Inserts parsed chunks into Milvus.
+        chunks: List of dicts from pdf_parser.flatten_pdf_tree
+        """
+        if not chunks:
+            return
+
+        print(f"Inserting {len(chunks)} chunks for doc_id: {doc_id}")
+        
+        # Prepare data for insertion
+        data_list = []
+        
+        # Batch embedding could be optimized here, but for now we do one by one or small batches
+        # Let's assume embed_query can handle single strings. 
+        # If we want batching, we should check FeatureExtractor.
+        
+        for chunk in chunks:
+            text = chunk["text"]
+            # Create a rich representation for embedding
+            # "Title: {Paper Title}\nSection: {Section Title}\nContent: {Text}"
+            embed_text = f"Title: {paper_title}\nSection: {chunk['section_title']}\nContent: {text}"
+            vector = self.embedding_client.embed_query(embed_text)
+            
+            entry = {
+                self.doc_id_field: doc_id,
+                self.vector_field: vector,
+                self.text_field: text,
+                self.title_field: paper_title, # Store paper title for context
+                
+                # Structure fields
+                self.chunk_id_field: chunk["chunk_index"],
+                self.section_category_field: chunk["section_category"],
+                self.parent_section_field: chunk["parent_section"],
+                self.page_number_field: chunk["page_number"],
+                
+                # Optional fields (can be empty or inherited if we had them)
+                self.url_field: "",
+                self.pdf_url_field: "",
+                self.conference_name_field: "", # Could pass these if needed
+                self.conference_year_field: 0,
+                self.conference_round_field: "",
+            }
+            data_list.append(entry)
+            
+        # Insert in batches if necessary (Milvus has limits)
+        batch_size = 100
+        for i in range(0, len(data_list), batch_size):
+            batch = data_list[i:i+batch_size]
+            self.client.insert(collection_name=self.collection, data=batch)
+            print(f"Inserted batch {i} to {i+len(batch)}")
+
+    def get_context_window(self, doc_id: str, center_chunk_index: int, window_size: int = 1) -> str:
+        """
+        Retrieves the context window around a specific chunk.
+        Returns the concatenated text of chunks in [center - window, center + window].
+        """
+        start_idx = max(0, center_chunk_index - window_size)
+        end_idx = center_chunk_index + window_size
+        
+        # Query Milvus for chunks with same doc_id and index in range
+        query = f'{self.doc_id_field} == "{doc_id}" && {self.chunk_id_field} >= {start_idx} && {self.chunk_id_field} <= {end_idx}'
+        
+        results = self.client.query(
+            collection_name=self.collection,
+            filter=query,
+            output_fields=[self.text_field, self.chunk_id_field],
+            limit=window_size * 2 + 5 # Fetch enough
+        )
+        
+        # Sort by chunk_id
+        sorted_chunks = sorted(results, key=lambda x: x[self.chunk_id_field])
+        
+        # Concatenate text
+        context_text = "\n\n".join([c[self.text_field] for c in sorted_chunks])
+        return context_text
+
+
 
     def list_resources(self) -> list[str]:
         return [
