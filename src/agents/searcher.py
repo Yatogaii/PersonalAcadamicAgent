@@ -5,12 +5,154 @@ from rag.retriever import get_rag_client_by_provider
 from settings import settings
 from models import init_kimi_k2
 from prompts.template import apply_prompt_template
+from langchain.tools import tool
+from langchain.agents import create_agent
 
+# Global RAG client for tools
+_rag_client = None
+
+def _get_rag_client():
+    global _rag_client
+    if _rag_client is None:
+        _rag_client = get_rag_client_by_provider(settings.rag_provider)
+    return _rag_client
+
+# ============== Agentic RAG Tools ==============
+
+@tool
+def search_abstracts(query: str, k: int = 5) -> str:
+    """
+    Search paper abstracts to identify relevant papers.
+    Use this FIRST to get an overview of relevant papers in the database.
+    
+    Args:
+        query: The search query (keywords or natural language)
+        k: Number of papers to return (default 5)
+    
+    Returns:
+        List of papers with title, abstract preview, and doc_id
+    """
+    client = _get_rag_client()
+    results = client.search_abstracts(query, k)
+    
+    if not results:
+        return "No papers found matching the query."
+    
+    output = []
+    for i, r in enumerate(results, 1):
+        abstract = r.get("abstract", "")[:300] + "..." if len(r.get("abstract", "")) > 300 else r.get("abstract", "")
+        output.append(
+            f"[{i}] {r.get('title', 'Untitled')}\n"
+            f"    doc_id: {r.get('doc_id', 'N/A')}\n"
+            f"    Abstract: {abstract}"
+        )
+    
+    return "\n\n".join(output)
+
+
+@tool  
+def search_by_section(query: str, doc_id: str = "", category: int = -1, k: int = 5) -> str:
+    """
+    Search within specific sections or papers for detailed information.
+    
+    Args:
+        query: The search query
+        doc_id: Limit search to a specific paper (use doc_id from search_abstracts). Leave empty for all papers.
+        category: Filter by section type. Use -1 for all sections.
+            0 = Abstract
+            1 = Introduction (background, motivation)
+            2 = Method (technical details, algorithms, architecture)
+            3 = Evaluation (experiments, results, performance numbers)
+            4 = Conclusion
+            6 = Related Work (describes OTHER papers!)
+        k: Number of chunks to return (default 5)
+    
+    Returns:
+        List of text chunks with metadata
+    """
+    client = _get_rag_client()
+    
+    # Handle empty string as None
+    actual_doc_id = doc_id if doc_id else None
+    actual_category = category if category >= 0 else None
+    
+    results = client.search_by_section(query, actual_doc_id, actual_category, k)
+    
+    if not results:
+        return "No matching sections found."
+    
+    from parser.pdf_parser import SectionCategory
+    
+    output = []
+    for i, r in enumerate(results, 1):
+        cat_id = r.get("section_category", 0)
+        try:
+            cat_name = SectionCategory(cat_id).name
+        except:
+            cat_name = "UNKNOWN"
+        
+        text = r.get("text", "")[:500] + "..." if len(r.get("text", "")) > 500 else r.get("text", "")
+        
+        output.append(
+            f"[{i}] doc_id: {r.get('doc_id', 'N/A')} | chunk_id: {r.get('chunk_id', 'N/A')}\n"
+            f"    Section: {cat_name} | Parent: {r.get('parent_section', 'N/A')}\n"
+            f"    Text: {text}"
+        )
+    
+    return "\n\n".join(output)
+
+
+@tool
+def get_context_window(doc_id: str, chunk_id: int, window: int = 1) -> str:
+    """
+    Get surrounding text around a specific chunk for more context.
+    Use when a retrieved snippet seems incomplete or truncated.
+    
+    Args:
+        doc_id: The paper's doc_id
+        chunk_id: The chunk_id from search_by_section results
+        window: Number of chunks before and after to include (default 1)
+    
+    Returns:
+        Extended text including surrounding chunks
+    """
+    client = _get_rag_client()
+    context = client.get_context_window(doc_id, chunk_id, window)
+    
+    if not context:
+        return "Could not retrieve context for this chunk."
+    
+    return f"[Context Window for doc_id={doc_id}, chunk_id={chunk_id}]\n\n{context}"
+
+
+@tool
+def get_paper_introduction(doc_id: str) -> str:
+    """
+    Get the Introduction section of a specific paper.
+    Use to understand the paper's background, motivation, and problem statement.
+    
+    Args:
+        doc_id: The paper's doc_id
+    
+    Returns:
+        The Introduction text (truncated if too long)
+    """
+    client = _get_rag_client()
+    intro = client.get_paper_introduction(doc_id)
+    
+    if not intro:
+        return f"No Introduction found for doc_id={doc_id}"
+    
+    return f"[Introduction for doc_id={doc_id}]\n\n{intro}"
+
+
+# ============== Searcher Class ==============
 
 class Searcher:
-    """RAG searcher that only retrieves and normalizes hits.
+    """RAG searcher that supports both simple and agentic modes.
 
-    Generation is handled by the coordinator to keep output format consistent.
+    - Simple mode: Direct vector search
+    - Agentic mode: LLM agent with multiple tools for iterative retrieval
     """
 
     def __init__(self) -> None:
@@ -19,49 +161,77 @@ class Searcher:
         
         if settings.enable_agentic_rag:
             self.llm = init_kimi_k2()
+            self._setup_agent()
 
-    def _refine_query(self, query: str) -> str:
-        """Uses LLM to refine the search query."""
+    def _setup_agent(self):
+        """Setup the LangChain agent with tools."""
+        self.tools = [
+            search_abstracts,
+            search_by_section,
+            get_context_window,
+            get_paper_introduction,
+        ]
+        
+        # Load prompt as system message
+        prompt_msgs = apply_prompt_template("agentic_searcher")
+        self.system_prompt = prompt_msgs[0]["content"]
+
+    def _agentic_search(self, query: str) -> Dict[str, Any]:
+        """Run the agentic search loop."""
+        agent = create_agent(
+            model=self.llm, 
+            tools=self.tools,
+        )
+        
+        # Build messages with system prompt and user query
+        msgs = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": query}
+        ]
+        
         try:
-            msgs = apply_prompt_template("rag_query_refiner", {"query": query})
-            # apply_prompt_template returns [{"role": "system", ...}]
-            # We need to append the user query if the template doesn't handle it fully, 
-            # but here the template uses {{query}} inside the system prompt or we should pass it as user message?
-            # Looking at rag_query_refiner.md, it has "User: {{query}}". 
-            # So the system prompt contains the input. 
-            # But usually we want a separate user message for the actual input if the system prompt is static instructions.
-            # However, apply_prompt_template renders the whole thing.
-            # Let's check apply_prompt_template implementation.
-            # It renders the template with params.
-            # So msgs[0]['content'] will have "User: <actual query>\nQuery:" at the end.
-            # This is fine for a completion-style prompt, but for ChatModel, we might want to structure it differently.
-            # But Kimi/OpenAI chat models handle this fine in system message or we can split it.
-            # For simplicity, let's trust the rendered prompt.
+            result = agent.invoke({"messages": msgs})
+            messages = result.get("messages", [])
+            # Get the last AI message as the answer
+            answer = ""
+            for msg in reversed(messages):
+                if hasattr(msg, 'content') and msg.content:
+                    answer = msg.content
+                    break
             
-            response = self.llm.invoke(msgs)
-            # response is an AIMessage
-            refined = response.content
-            if isinstance(refined, str):
-                refined = refined.strip()
-            else:
-                # Handle case where content might be list (e.g. multimodal)
-                refined = str(refined).strip()
-                
-            logger.info(f"Agentic RAG: Refined query '{query}' -> '{refined}'")
-            return refined
+            return {
+                "answer": answer,
+                "intermediate_steps": messages
+            }
         except Exception as e:
-            logger.error(f"Query refinement failed: {e}")
-            return query
+            logger.error(f"Agentic search failed: {e}")
+            return {"answer": f"Search failed: {e}", "intermediate_steps": []}
 
     def search(self, query: str, k: int | None = None) -> List[Dict[str, Any]]:
         """Query vector store and return normalized hits with ids."""
         k = k or self.top_k
         
-        search_query = query
         if settings.enable_agentic_rag:
-            search_query = self._refine_query(query)
+            # Agentic mode: return the agent's analysis
+            result = self._agentic_search(query)
+            # For compatibility, wrap the answer in a hit-like structure
+            return [{
+                "id": 1,
+                "title": "Agentic Search Result",
+                "abstract": result["answer"],
+                "url": "",
+                "doc_id": "agentic",
+                "score": 1.0,
+                "conference_name": "",
+                "conference_year": "",
+                "conference_round": "",
+                "section_category": 0,
+                "parent_section": "",
+                "page_number": 0,
+            }]
             
-        raw_hits = self.rag_client.query_relevant_documents(search_query)
+        # Simple mode: direct vector search
+        raw_hits = self.rag_client.query_relevant_documents(query)
         hits: List[Dict[str, Any]] = []
         for idx, hit in enumerate(raw_hits[:k]):
             hits.append(
@@ -87,6 +257,10 @@ class Searcher:
         """Helper for coordinator: render hits into concise numbered blocks."""
         if not hits:
             return "No relevant documents found."
+        
+        # Check if this is an agentic result
+        if len(hits) == 1 and hits[0].get("doc_id") == "agentic":
+            return hits[0].get("abstract", "No answer generated.")
         
         from parser.pdf_parser import SectionCategory
         

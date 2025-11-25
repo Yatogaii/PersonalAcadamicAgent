@@ -188,3 +188,13 @@ class PGVectorProvider(RAG):
 
     def get_context_window(self, doc_id: str, center_chunk_index: int, window_size: int = 1) -> str:
         raise NotImplementedError("Structure-aware RAG not yet implemented for PGVector")
+
+    def search_by_section(self, query: str, doc_id: str | None = None, 
+                          section_category: int | None = None, k: int = 5) -> list[dict]:
+        raise NotImplementedError("Structure-aware RAG not yet implemented for PGVector")
+
+    def search_abstracts(self, query: str, k: int = 5) -> list[dict]:
+        raise NotImplementedError("Structure-aware RAG not yet implemented for PGVector")
+
+    def get_paper_introduction(self, doc_id: str) -> str:
+        raise NotImplementedError("Structure-aware RAG not yet implemented for PGVector")

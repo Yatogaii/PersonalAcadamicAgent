@@ -56,6 +56,37 @@ class RAG(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def search_by_section(self, query: str, doc_id: str | None = None, 
+                          section_category: int | None = None, k: int = 5) -> list[dict]:
+        """
+        Search within specific section types or specific documents.
+        Args:
+            query: Search query
+            doc_id: Optional - limit search to a specific paper
+            section_category: Optional - filter by section type (0=Abstract, 1=Intro, 2=Method, etc.)
+            k: Number of results to return
+        Returns:
+            List of hits with metadata
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def search_abstracts(self, query: str, k: int = 5) -> list[dict]:
+        """
+        Search only in Abstract sections to find relevant papers.
+        Returns list of papers with their abstracts.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_paper_introduction(self, doc_id: str) -> str:
+        """
+        Get the Introduction section of a specific paper.
+        Used to provide background context.
+        """
+        raise NotImplementedError
+
 _rag_clients: dict[str, RAG] = {}
 
 def get_rag_client_by_provider(provider: str) -> RAG:

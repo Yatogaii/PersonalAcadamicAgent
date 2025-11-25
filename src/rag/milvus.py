@@ -255,7 +255,123 @@ class MilvusProvider(RAG):
         context_text = "\n\n".join([c[self.text_field] for c in sorted_chunks])
         return context_text
 
+    def search_by_section(self, query: str, doc_id: str | None = None, 
+                          section_category: int | None = None, k: int = 5) -> list[dict]:
+        """
+        Search within specific section types or specific documents.
+        """
+        # Build filter
+        filters = []
+        if doc_id:
+            filters.append(f'{self.doc_id_field} == "{doc_id}"')
+        if section_category is not None:
+            filters.append(f'{self.section_category_field} == {section_category}')
+        
+        filter_expr = " && ".join(filters) if filters else ""
+        
+        search_params = {**self.search_params}
+        
+        milvus_res = self.client.search(
+            collection_name=self.collection,
+            data=[self.embedding_client.embed_query(query)],
+            filter=filter_expr if filter_expr else None,
+            limit=k,
+            search_params=search_params,
+            output_fields=[
+                self.title_field,
+                self.text_field,
+                self.doc_id_field,
+                self.chunk_id_field,
+                self.section_category_field,
+                self.parent_section_field,
+                self.page_number_field,
+            ]
+        )
+        
+        res = []
+        for hit in milvus_res[0]:
+            res.append({
+                "title": hit.get(self.title_field, ""),
+                "text": hit.get(self.text_field, ""),
+                "doc_id": hit.get(self.doc_id_field, ""),
+                "chunk_id": hit.get(self.chunk_id_field, -1),
+                "section_category": hit.get(self.section_category_field, 0),
+                "parent_section": hit.get(self.parent_section_field, ""),
+                "page_number": hit.get(self.page_number_field, 0),
+                "score": hit.distance if hasattr(hit, 'distance') else 0.0,
+            })
+        return res
 
+    def search_abstracts(self, query: str, k: int = 5) -> list[dict]:
+        """
+        Search only in Abstract sections (section_category=0) to find relevant papers.
+        Also includes paper-level entries (chunk_id=-1).
+        """
+        # Filter for abstracts: section_category == 0 OR chunk_id == -1 (paper-level)
+        filter_expr = f'{self.section_category_field} == 0 || {self.chunk_id_field} == -1'
+        
+        milvus_res = self.client.search(
+            collection_name=self.collection,
+            data=[self.embedding_client.embed_query(query)],
+            filter=filter_expr,
+            limit=k,
+            search_params=self.search_params,
+            output_fields=[
+                self.title_field,
+                self.text_field,
+                self.doc_id_field,
+                self.url_field,
+                self.pdf_url_field,
+                self.conference_name_field,
+                self.conference_year_field,
+            ]
+        )
+        
+        res = []
+        seen_docs = set()  # Deduplicate by doc_id
+        for hit in milvus_res[0]:
+            doc_id = hit.get(self.doc_id_field, "")
+            if doc_id in seen_docs:
+                continue
+            seen_docs.add(doc_id)
+            
+            res.append({
+                "title": hit.get(self.title_field, ""),
+                "abstract": hit.get(self.text_field, ""),
+                "doc_id": doc_id,
+                "url": hit.get(self.url_field, ""),
+                "pdf_url": hit.get(self.pdf_url_field, ""),
+                "conference_name": hit.get(self.conference_name_field, ""),
+                "conference_year": hit.get(self.conference_year_field, 0),
+                "score": hit.distance if hasattr(hit, 'distance') else 0.0,
+            })
+        return res
+
+    def get_paper_introduction(self, doc_id: str) -> str:
+        """
+        Get the Introduction section (section_category=1) of a specific paper.
+        """
+        filter_expr = f'{self.doc_id_field} == "{doc_id}" && {self.section_category_field} == 1'
+        
+        results = self.client.query(
+            collection_name=self.collection,
+            filter=filter_expr,
+            output_fields=[self.text_field, self.chunk_id_field],
+            limit=10  # Introduction might span multiple chunks
+        )
+        
+        if not results:
+            return ""
+        
+        # Sort by chunk_id and concatenate
+        sorted_chunks = sorted(results, key=lambda x: x.get(self.chunk_id_field, 0))
+        intro_text = "\n\n".join([c[self.text_field] for c in sorted_chunks])
+        
+        # Truncate if too long (keep first ~1000 chars)
+        if len(intro_text) > 1500:
+            intro_text = intro_text[:1500] + "..."
+        
+        return intro_text
 
     def list_resources(self) -> list[str]:
         return [
