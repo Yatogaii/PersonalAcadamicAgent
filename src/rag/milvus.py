@@ -128,6 +128,9 @@ class MilvusProvider(RAG):
                                             self.conference_name_field,
                                             self.conference_year_field,
                                             self.conference_round_field,
+                                            self.section_category_field,
+                                            self.parent_section_field,
+                                            self.page_number_field,
                                         ])
         for each_entity in milvus_res[0]:
             res.append({
@@ -139,6 +142,9 @@ class MilvusProvider(RAG):
                 "conference_name": each_entity[self.conference_name_field],
                 "conference_year": each_entity[self.conference_year_field],
                 "conference_round": each_entity[self.conference_round_field],
+                "section_category": each_entity.get(self.section_category_field, 0),
+                "parent_section": each_entity.get(self.parent_section_field, ""),
+                "page_number": each_entity.get(self.page_number_field, 0),
             })
 
         return res

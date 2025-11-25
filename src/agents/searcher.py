@@ -32,6 +32,9 @@ class Searcher:
                     "conference_name": hit.get("conference_name", ""),
                     "conference_year": hit.get("conference_year", ""),
                     "conference_round": hit.get("conference_round", ""),
+                    "section_category": hit.get("section_category", 0),
+                    "parent_section": hit.get("parent_section", ""),
+                    "page_number": hit.get("page_number", 0),
                 }
             )
         logger.info(f"Searcher retrieved {len(hits)} hits for query: {query}")
@@ -41,6 +44,9 @@ class Searcher:
         """Helper for coordinator: render hits into concise numbered blocks."""
         if not hits:
             return "No relevant documents found."
+        
+        from parser.pdf_parser import SectionCategory
+        
         blocks = []
         for h in hits:
             meta_parts = []
@@ -48,8 +54,25 @@ class Searcher:
                 meta_parts.append(str(h["conference_name"]))
             if h.get("conference_year"):
                 meta_parts.append(str(h["conference_year"]))
-            if h.get("conference_round"):
-                meta_parts.append(str(h["conference_round"]))
+            
+            # Add structure info to metadata
+            cat_id = h.get("section_category", 0)
+            try:
+                cat_name = SectionCategory(cat_id).name
+            except:
+                cat_name = "UNKNOWN"
+            
+            if cat_name != "ABSTRACT":
+                meta_parts.append(f"Section: {cat_name}")
+            
+            parent = h.get("parent_section")
+            if parent:
+                meta_parts.append(f"Parent: {parent}")
+                
+            page = h.get("page_number")
+            if page and page > 0:
+                meta_parts.append(f"Page: {page}")
+
             meta = " | ".join(meta_parts)
             abstract = h.get("abstract", "")
             if len(abstract) > max_len:
@@ -58,7 +81,7 @@ class Searcher:
                 f"[{h['id']}] {h.get('title') or 'Untitled'}\n"
                 f"{meta + '\\n' if meta else ''}"
                 f"URL: {h.get('url') or 'N/A'}\n"
-                f"Abstract: {abstract}"
+                f"Content: {abstract}"
             )
         return "\n\n".join(blocks)
 
