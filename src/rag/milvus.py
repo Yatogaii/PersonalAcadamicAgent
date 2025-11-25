@@ -443,3 +443,87 @@ class MilvusProvider(RAG):
             chunks.append(Chunk(content=content, metadata=metadata, score=0.0))
 
         return chunks
+
+    # ============== Lazy Load PDF 相关方法实现 ==============
+    
+    def check_pdf_chunks_exist(self, doc_id: str) -> bool:
+        """检查论文的 PDF chunks 是否已存在（chunk_id >= 0 的记录）"""
+        query = f'{self.doc_id_field} == "{doc_id}" && {self.chunk_id_field} >= 0'
+        results = self.client.query(
+            collection_name=self.collection,
+            filter=query,
+            output_fields=[self.id_field],
+            limit=1
+        )
+        return len(results) > 0
+    
+    def get_paper_metadata(self, doc_id: str) -> dict | None:
+        """获取论文的元数据（chunk_id = -1 的记录）"""
+        query = f'{self.doc_id_field} == "{doc_id}" && {self.chunk_id_field} == -1'
+        results = self.client.query(
+            collection_name=self.collection,
+            filter=query,
+            output_fields=[
+                self.title_field,
+                self.text_field,  # abstract
+                self.url_field,
+                self.pdf_url_field,
+                self.conference_name_field,
+                self.conference_year_field,
+                self.conference_round_field,
+            ],
+            limit=1
+        )
+        if not results:
+            return None
+        
+        r = results[0]
+        return {
+            "doc_id": doc_id,
+            "title": r.get(self.title_field, ""),
+            "abstract": r.get(self.text_field, ""),
+            "url": r.get(self.url_field, ""),
+            "pdf_url": r.get(self.pdf_url_field, ""),
+            "conference_name": r.get(self.conference_name_field, ""),
+            "conference_year": r.get(self.conference_year_field, 0),
+            "conference_round": r.get(self.conference_round_field, ""),
+        }
+    
+    def get_papers_metadata_batch(self, doc_ids: list[str]) -> list[dict]:
+        """批量获取论文元数据"""
+        if not doc_ids:
+            return []
+        
+        # 构建 OR 查询
+        doc_id_conditions = " || ".join([f'{self.doc_id_field} == "{did}"' for did in doc_ids])
+        query = f'({doc_id_conditions}) && {self.chunk_id_field} == -1'
+        
+        results = self.client.query(
+            collection_name=self.collection,
+            filter=query,
+            output_fields=[
+                self.doc_id_field,
+                self.title_field,
+                self.text_field,
+                self.url_field,
+                self.pdf_url_field,
+                self.conference_name_field,
+                self.conference_year_field,
+                self.conference_round_field,
+            ],
+            limit=len(doc_ids)
+        )
+        
+        return [
+            {
+                "doc_id": r.get(self.doc_id_field, ""),
+                "title": r.get(self.title_field, ""),
+                "abstract": r.get(self.text_field, ""),
+                "url": r.get(self.url_field, ""),
+                "pdf_url": r.get(self.pdf_url_field, ""),
+                "conference_name": r.get(self.conference_name_field, ""),
+                "conference_year": r.get(self.conference_year_field, 0),
+                "conference_round": r.get(self.conference_round_field, ""),
+            }
+            for r in results
+        ]

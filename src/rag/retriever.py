@@ -87,6 +87,45 @@ class RAG(ABC):
         """
         raise NotImplementedError
 
+    # ============== Lazy Load PDF 相关方法 ==============
+    
+    @abstractmethod
+    def check_pdf_chunks_exist(self, doc_id: str) -> bool:
+        """
+        检查论文的 PDF chunks 是否已存在于数据库。
+        用于判断是否需要加载 PDF。
+        
+        Args:
+            doc_id: 论文的唯一标识
+        Returns:
+            True if chunks exist (chunk_id >= 0), False otherwise
+        """
+        raise NotImplementedError
+    
+    @abstractmethod
+    def get_paper_metadata(self, doc_id: str) -> dict | None:
+        """
+        获取论文的元数据（chunk_id = -1 的记录）。
+        
+        Args:
+            doc_id: 论文的唯一标识
+        Returns:
+            dict with title, abstract, pdf_url, etc. or None if not found
+        """
+        raise NotImplementedError
+    
+    @abstractmethod
+    def get_papers_metadata_batch(self, doc_ids: list[str]) -> list[dict]:
+        """
+        批量获取论文元数据。
+        
+        Args:
+            doc_ids: 论文 doc_id 列表
+        Returns:
+            list of metadata dicts
+        """
+        raise NotImplementedError
+
 _rag_clients: dict[str, RAG] = {}
 
 def get_rag_client_by_provider(provider: str) -> RAG:

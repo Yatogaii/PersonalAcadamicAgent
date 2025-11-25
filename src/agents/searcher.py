@@ -2,14 +2,16 @@ from typing import Any, Dict, List
 
 from logging_config import logger
 from rag.retriever import get_rag_client_by_provider
+from rag.pdf_loader import PDFLoader, LoadStatus
 from settings import settings
 from models import init_kimi_k2
 from prompts.template import apply_prompt_template
 from langchain.tools import tool
 from langchain.agents import create_agent
 
-# Global RAG client for tools
+# Global RAG client and PDF loader for tools
 _rag_client = None
+_pdf_loader = None
 
 def _get_rag_client():
     global _rag_client
@@ -17,20 +19,27 @@ def _get_rag_client():
         _rag_client = get_rag_client_by_provider(settings.rag_provider)
     return _rag_client
 
-# ============== Agentic RAG Tools ==============
+def _get_pdf_loader():
+    global _pdf_loader
+    if _pdf_loader is None:
+        _pdf_loader = PDFLoader(_get_rag_client())
+    return _pdf_loader
+
+
+# ============== Phase 2: Abstract Search ==============
 
 @tool
 def search_abstracts(query: str, k: int = 5) -> str:
     """
-    Search paper abstracts to identify relevant papers.
-    Use this FIRST to get an overview of relevant papers in the database.
+    [Phase 2] 搜索论文摘要，找出相关论文。
+    这是搜索的第一步，返回候选论文列表。
     
     Args:
-        query: The search query (keywords or natural language)
-        k: Number of papers to return (default 5)
+        query: 搜索关键词或自然语言查询
+        k: 返回论文数量 (默认 5)
     
     Returns:
-        List of papers with title, abstract preview, and doc_id
+        候选论文列表，包含 title, abstract 预览, doc_id
     """
     client = _get_rag_client()
     results = client.search_abstracts(query, k)
@@ -50,36 +59,111 @@ def search_abstracts(query: str, k: int = 5) -> str:
     return "\n\n".join(output)
 
 
-@tool  
-def search_by_section(query: str, doc_id: str = "", category: int = -1, k: int = 5) -> str:
+# ============== Phase 3: Lazy Load PDF ==============
+
+@tool
+def load_paper_pdfs(doc_ids: List[str]) -> str:
     """
-    Search within specific sections or papers for detailed information.
+    [Phase 3] 加载指定论文的 PDF 内容到数据库。
+    在使用 search_paper_content 之前必须调用此工具！
+    会自动跳过已加载的论文。
     
     Args:
-        query: The search query
-        doc_id: Limit search to a specific paper (use doc_id from search_abstracts). Leave empty for all papers.
-        category: Filter by section type. Use -1 for all sections.
-            0 = Abstract
-            1 = Introduction (background, motivation)
-            2 = Method (technical details, algorithms, architecture)
-            3 = Evaluation (experiments, results, performance numbers)
-            4 = Conclusion
-            6 = Related Work (describes OTHER papers!)
-        k: Number of chunks to return (default 5)
+        doc_ids: 要加载的论文 doc_id 列表（从 search_abstracts 获取）
     
     Returns:
-        List of text chunks with metadata
+        加载状态报告
+    
+    注意：
+        - 一次建议加载 3-5 篇论文，避免等待过长
+        - 加载过程需要下载和解析 PDF，可能需要一些时间
+    """
+    loader = _get_pdf_loader()
+    results = loader.load_papers(doc_ids)
+    
+    # 格式化输出
+    output = ["PDF Loading Results:"]
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+    
+    for doc_id, result in results.items():
+        status_icon = {
+            LoadStatus.SUCCESS: "✓",
+            LoadStatus.ALREADY_EXISTS: "○",
+            LoadStatus.DOWNLOAD_FAILED: "✗",
+            LoadStatus.PARSE_FAILED: "✗",
+            LoadStatus.NO_PDF_URL: "✗",
+            LoadStatus.NOT_FOUND: "✗",
+        }.get(result.status, "?")
+        
+        output.append(f"  {status_icon} {doc_id}: {result.message}")
+        
+        if result.status == LoadStatus.SUCCESS:
+            success_count += 1
+        elif result.status == LoadStatus.ALREADY_EXISTS:
+            skip_count += 1
+        else:
+            fail_count += 1
+    
+    output.append(f"\nSummary: {success_count} loaded, {skip_count} skipped, {fail_count} failed")
+    
+    if success_count + skip_count > 0:
+        output.append("\nYou can now use search_paper_content to search within these papers.")
+    
+    return "\n".join(output)
+
+
+# ============== Phase 4: Deep Search ==============
+
+@tool  
+def search_paper_content(query: str, doc_ids: List[str] = [], category: int = -1, k: int = 5) -> str:
+    """
+    [Phase 4] 在已加载的论文中搜索具体内容。
+    注意：必须先用 load_paper_pdfs 加载论文！
+    
+    Args:
+        query: 搜索查询
+        doc_ids: 要搜索的论文 doc_id 列表（留空则搜索所有已加载的论文）
+        category: 章节类型过滤，-1 表示全部
+            0 = Abstract (摘要)
+            1 = Introduction (背景、动机)
+            2 = Method (技术细节、算法、架构)
+            3 = Evaluation (实验、结果、性能数据)
+            4 = Conclusion (结论)
+            6 = Related Work (注意：描述的是其他论文！)
+        k: 返回结果数量 (默认 5)
+    
+    Returns:
+        匹配的文本片段及其元数据
     """
     client = _get_rag_client()
     
-    # Handle empty string as None
-    actual_doc_id = doc_id if doc_id else None
-    actual_category = category if category >= 0 else None
-    
-    results = client.search_by_section(query, actual_doc_id, actual_category, k)
+    # 如果指定了 doc_ids，需要逐个搜索并合并结果
+    # TODO: 优化为批量搜索
+    if doc_ids:
+        all_results = []
+        for doc_id in doc_ids:
+            results = client.search_by_section(
+                query, 
+                doc_id=doc_id, 
+                section_category=category if category >= 0 else None, 
+                k=k
+            )
+            all_results.extend(results)
+        # 按相关性排序（假设有 score 字段）
+        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        results = all_results[:k]
+    else:
+        results = client.search_by_section(
+            query, 
+            doc_id=None, 
+            section_category=category if category >= 0 else None, 
+            k=k
+        )
     
     if not results:
-        return "No matching sections found."
+        return "No matching content found. Make sure you have loaded the papers first using load_paper_pdfs."
     
     from parser.pdf_parser import SectionCategory
     
@@ -102,19 +186,21 @@ def search_by_section(query: str, doc_id: str = "", category: int = -1, k: int =
     return "\n\n".join(output)
 
 
+# ============== Context Tools ==============
+
 @tool
 def get_context_window(doc_id: str, chunk_id: int, window: int = 1) -> str:
     """
-    Get surrounding text around a specific chunk for more context.
-    Use when a retrieved snippet seems incomplete or truncated.
+    获取指定 chunk 周围的上下文文本。
+    当检索到的片段不完整或被截断时使用。
     
     Args:
-        doc_id: The paper's doc_id
-        chunk_id: The chunk_id from search_by_section results
-        window: Number of chunks before and after to include (default 1)
+        doc_id: 论文的 doc_id
+        chunk_id: chunk_id（从 search_paper_content 结果获取）
+        window: 前后各包含多少个 chunk (默认 1)
     
     Returns:
-        Extended text including surrounding chunks
+        扩展的上下文文本
     """
     client = _get_rag_client()
     context = client.get_context_window(doc_id, chunk_id, window)
@@ -125,34 +211,19 @@ def get_context_window(doc_id: str, chunk_id: int, window: int = 1) -> str:
     return f"[Context Window for doc_id={doc_id}, chunk_id={chunk_id}]\n\n{context}"
 
 
-@tool
-def get_paper_introduction(doc_id: str) -> str:
-    """
-    Get the Introduction section of a specific paper.
-    Use to understand the paper's background, motivation, and problem statement.
-    
-    Args:
-        doc_id: The paper's doc_id
-    
-    Returns:
-        The Introduction text (truncated if too long)
-    """
-    client = _get_rag_client()
-    intro = client.get_paper_introduction(doc_id)
-    
-    if not intro:
-        return f"No Introduction found for doc_id={doc_id}"
-    
-    return f"[Introduction for doc_id={doc_id}]\n\n{intro}"
-
-
 # ============== Searcher Class ==============
 
 class Searcher:
     """RAG searcher that supports both simple and agentic modes.
 
-    - Simple mode: Direct vector search
-    - Agentic mode: LLM agent with multiple tools for iterative retrieval
+    - Simple mode: Direct vector search (only abstracts)
+    - Agentic mode: LLM agent with Lazy Load PDF workflow
+    
+    Lazy Load Workflow:
+    1. search_abstracts - 找候选论文
+    2. load_paper_pdfs - 按需加载 PDF
+    3. search_paper_content - 搜索正文
+    4. get_context_window - 获取更多上下文
     """
 
     def __init__(self) -> None:
@@ -164,12 +235,16 @@ class Searcher:
             self._setup_agent()
 
     def _setup_agent(self):
-        """Setup the LangChain agent with tools."""
+        """Setup the LangChain agent with Lazy Load tools."""
         self.tools = [
+            # Phase 2: Abstract search
             search_abstracts,
-            search_by_section,
+            # Phase 3: Lazy load PDF
+            load_paper_pdfs,
+            # Phase 4: Deep search
+            search_paper_content,
+            # Context tools
             get_context_window,
-            get_paper_introduction,
         ]
         
         # Load prompt as system message
