@@ -108,6 +108,8 @@ def get_pdf_outline(doc):
     Extracts the outline (bookmarks) from a PDF using PyMuPDF.
     Returns a nested list of dictionaries representing the structure.
     Each dict has: 'title', 'page', 'children'.
+    
+    Also attempts to find Abstract if not in TOC.
     """
     toc = doc.get_toc()
     # toc item: [lvl, title, page] or [lvl, title, page, dest] depending on version/file
@@ -121,6 +123,9 @@ def get_pdf_outline(doc):
     # Level 1 is usually top level
     stack.append((0, root))
     
+    has_abstract = False
+    first_section_page = 0
+    
     for item in toc:
         # Handle variable length tuple
         if len(item) == 3:
@@ -129,6 +134,10 @@ def get_pdf_outline(doc):
             lvl, title, page = item[0], item[1], item[2]
         else:
             continue
+        
+        # Check if abstract exists in TOC
+        if 'abstract' in title.lower():
+            has_abstract = True
             
         # page is 1-based in get_toc output usually, let's verify
         # PyMuPDF docs say page number is 1-based. We convert to 0-based.
@@ -137,6 +146,10 @@ def get_pdf_outline(doc):
             page_idx = page - 1
         else:
             page_idx = 0 # Fallback
+        
+        # Track the first section page
+        if first_section_page == 0 and lvl == 1:
+            first_section_page = page_idx
         
         node = {"title": title, "page": page_idx, "children": []}
         
@@ -153,8 +166,49 @@ def get_pdf_outline(doc):
             parent_list = stack[-1][1]
             parent_list.append(node)
             stack.append((lvl, node["children"]))
+    
+    # If no Abstract in TOC, try to find it on the first page(s)
+    if not has_abstract and root:
+        abstract_node = _find_abstract(doc, first_section_page)
+        if abstract_node:
+            root.insert(0, abstract_node)
             
     return root
+
+
+def _find_abstract(doc, first_section_page: int) -> dict | None:
+    """
+    Try to find Abstract section in pages before the first TOC section.
+    Many papers have Abstract on page 1 but it's not in the TOC.
+    """
+    # Search in first few pages (before the first section)
+    search_pages = min(first_section_page + 1, 3)  # At most first 3 pages
+    
+    for page_idx in range(search_pages):
+        page = doc[page_idx]
+        text = page.get_text()
+        
+        # Look for "Abstract" as a section header
+        # Common patterns: "Abstract", "ABSTRACT", "Abstract."
+        match = re.search(r'\n\s*(Abstract|ABSTRACT)\s*\n', text)
+        if match:
+            return {
+                "title": "Abstract",
+                "page": page_idx,
+                "children": []
+            }
+        
+        # Also try to find it at the beginning (some PDFs have it without explicit header)
+        # Pattern: Abstract followed by the actual abstract text
+        match = re.search(r'(^|\n)\s*(Abstract|ABSTRACT)[:\.]?\s*\n', text)
+        if match:
+            return {
+                "title": "Abstract",
+                "page": page_idx,
+                "children": []
+            }
+    
+    return None
 
 def clean_text(text):
     """
@@ -196,6 +250,7 @@ def parse_pdf(pdf_path):
     
     if not outline_tree:
         print("No outline found.")
+        doc.close()
         return []
     
     print(f"Found outline with structure.")
@@ -209,6 +264,16 @@ def parse_pdf(pdf_path):
     _flatten(outline_tree)
     
     total_pages = doc.page_count
+    
+    # Pre-extract all page texts for efficiency and better boundary handling
+    page_texts = []
+    for p_idx in range(total_pages):
+        page = doc[p_idx]
+        html_content: str = page.get_text("html")  # type: ignore
+        soup = BeautifulSoup(html_content, "html.parser")
+        page_text = soup.get_text(separator="\n")
+        lines = [line.strip() for line in page_text.split('\n') if line.strip()]
+        page_texts.append("\n".join(lines))
     
     for i, node in enumerate(flat_nodes):
         start_page_idx = node["page"]
@@ -225,52 +290,125 @@ def parse_pdf(pdf_path):
         
         node["content"] = []
         
-        # Iterate through pages involved in this section
+        # Collect content across pages
+        full_content = []
+        
         for p_idx in range(start_page_idx, end_page_idx + 1):
-            if p_idx >= total_pages: break
+            if p_idx >= total_pages:
+                break
             
-            page = doc[p_idx]
+            cleaned_text = page_texts[p_idx]
             
-            # Convert page to HTML
-            # This preserves reading order (columns) and provides style info
-            html_content = page.get_text("html")
-            soup = BeautifulSoup(html_content, "html.parser")
-            
-            # Extract text from HTML
-            # We can use separator to keep paragraphs distinct
-            page_text = soup.get_text(separator="\n")
-            
-            # Simple cleaning to prepare for regex matching
-            lines = [line.strip() for line in page_text.split('\n') if line.strip()]
-            cleaned_text = "\n".join(lines)
-            
-            # Find start index
+            # Determine start position in this page's text
             start_idx = 0
             if p_idx == start_page_idx:
-                # Try to find title
-                # We use a loose match because HTML conversion might add spaces/newlines
-                pattern = re.escape(current_title).replace(r'\ ', r'\s+')
-                match = re.search(pattern, cleaned_text, re.IGNORECASE)
-                if match:
-                    start_idx = match.end()
+                # Find current section title - use the improved function
+                title_pos = _find_section_title_position(cleaned_text, current_title)
+                if title_pos >= 0:
+                    # Find the end of the title line, starting from title_pos
+                    # Use pattern that matches the title from the correct position
+                    search_text = cleaned_text[title_pos:]
+                    pattern = _make_title_pattern(current_title, require_section_number=False)
+                    match = re.search(pattern, search_text, re.IGNORECASE)
+                    if match:
+                        start_idx = title_pos + match.end()
+                        # Skip any leading whitespace/newlines after title
+                        while start_idx < len(cleaned_text) and cleaned_text[start_idx] in '\n\r\t ':
+                            start_idx += 1
             
-            # Find end index
+            # Determine end position in this page's text
             end_idx = len(cleaned_text)
+            
+            # If this is the last page for this section AND there's a next section
             if p_idx == end_page_idx and next_title:
-                pattern = re.escape(next_title).replace(r'\ ', r'\s+')
-                match = re.search(pattern, cleaned_text, re.IGNORECASE)
-                if match:
-                    end_idx = match.start()
+                # Use improved position finding that prefers section-numbered titles
+                pos = _find_section_title_position(cleaned_text, next_title, start_idx)
+                if pos >= 0:
+                    end_idx = pos
+            
+            # Also check for ANY subsequent section title on this page
+            # (handles case where multiple sections are on same page)
+            if p_idx == start_page_idx:
+                # Look for other section titles that come after current one
+                for j in range(i + 1, len(flat_nodes)):
+                    other_node = flat_nodes[j]
+                    if other_node["page"] == p_idx:
+                        # Use improved position finding
+                        pos = _find_section_title_position(cleaned_text, other_node["title"], start_idx)
+                        if pos >= 0 and pos < end_idx:
+                            end_idx = pos
+                    elif other_node["page"] > p_idx:
+                        break
             
             if start_idx < end_idx:
                 chunk = cleaned_text[start_idx:end_idx].strip()
                 if chunk:
-                    # Apply deep cleaning to the content chunk
-                    cleaned_chunk = clean_text(chunk)
-                    if cleaned_chunk:
-                        node["content"].append(cleaned_chunk)
+                    full_content.append(chunk)
+        
+        # Combine all content and clean
+        if full_content:
+            combined = "\n".join(full_content)
+            cleaned_chunk = clean_text(combined)
+            if cleaned_chunk:
+                node["content"].append(cleaned_chunk)
 
+    doc.close()
     return outline_tree
+
+
+def _make_title_pattern(title: str, require_section_number: bool = False) -> str:
+    """
+    Create a regex pattern for matching section titles.
+    Handles variations in spacing and numbering.
+    
+    Args:
+        title: The section title to match
+        require_section_number: If True, requires a section number before the title
+                               (useful to avoid matching words in body text)
+    """
+    # Escape special regex characters
+    escaped = re.escape(title)
+    # Allow flexible whitespace
+    pattern = escaped.replace(r'\ ', r'\s+')
+    
+    if require_section_number:
+        # Require a section number like "3.1" or "3.2.1" before the title
+        # This prevents matching words like "attention" in body text
+        pattern = r'(?:^|\n)\s*(\d+\.(?:\d+\.?)*)\s*' + pattern
+    else:
+        # Allow optional section numbers
+        pattern = r'(?:^|\n)\s*(?:\d+\.?\d*\.?\s*)?' + pattern
+    
+    return pattern
+
+
+def _find_section_title_position(text: str, title: str, start_from: int = 0) -> int:
+    """
+    Find the position of a section title in text.
+    First tries to match with section number requirement, falls back to looser match.
+    
+    Returns:
+        Position of the title start, or -1 if not found
+    """
+    search_text = text[start_from:]
+    
+    # First try: require section number (e.g., "3.2 Attention")
+    pattern = _make_title_pattern(title, require_section_number=True)
+    match = re.search(pattern, search_text, re.IGNORECASE)
+    if match:
+        return start_from + match.start()
+    
+    # Second try: match title at line start without section number
+    # But ensure it's at the beginning of a line, not mid-sentence
+    # Pattern: newline + optional spaces + title (not preceded by lowercase letter)
+    escaped = re.escape(title).replace(r'\ ', r'\s+')
+    pattern = r'(?:^|\n)\s*' + escaped + r'\s*(?:\n|$)'
+    match = re.search(pattern, search_text, re.IGNORECASE)
+    if match:
+        return start_from + match.start()
+    
+    return -1
+
 
 def parse_pdf_chunks(pdf_path):
     """
