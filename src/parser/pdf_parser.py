@@ -2,6 +2,106 @@ import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 import os
 import re
+from enum import IntEnum
+
+class SectionCategory(IntEnum):
+    ABSTRACT = 0
+    INTRODUCTION = 1
+    METHOD = 2
+    EVALUATION = 3
+    CONCLUSION = 4
+    OTHER = 5
+    RELATED_WORK = 6
+
+def classify_section(title: str, paper_title: str = "") -> int:
+    """
+    Classifies a section title into one of the predefined categories.
+    """
+    title_lower = title.lower()
+    
+    if re.search(r'abstract', title_lower):
+        return SectionCategory.ABSTRACT
+    elif re.search(r'related work', title_lower):
+        return SectionCategory.RELATED_WORK
+    elif re.search(r'introduction|background|motivation', title_lower):
+        return SectionCategory.INTRODUCTION
+    elif re.search(r'method|approach|architecture|proposed|framework', title_lower):
+        return SectionCategory.METHOD
+    elif re.search(r'experiment|result|evaluation|ablation|performance|comparison', title_lower):
+        return SectionCategory.EVALUATION
+    elif re.search(r'conclusion|discussion|summary|future work', title_lower):
+        return SectionCategory.CONCLUSION
+    
+    # Dynamic Method Matching: Check if section title contains significant words from paper title
+    if paper_title:
+        # Extract words, ignore common stop words
+        stop_words = {'a', 'an', 'the', 'for', 'and', 'of', 'in', 'on', 'with', 'to', 'at', 'by', 'from'}
+        paper_words = [w.lower() for w in re.findall(r'\w+', paper_title) if w.lower() not in stop_words and len(w) > 2]
+        
+        # Check if any significant word from paper title appears in section title
+        # We require at least one significant word match, but maybe we should be stricter?
+        # Let's try to match if the section title is mostly composed of title keywords
+        # Or if the section title *is* a substring of the paper title (fuzzy)
+        
+        # Simple heuristic: If section title contains a significant keyword from paper title
+        # AND it's not just a generic word (which we filtered via stop_words, but maybe not enough)
+        for word in paper_words:
+            if word in title_lower:
+                # Double check it's not a false positive like "Introduction" (already handled)
+                return SectionCategory.METHOD
+
+    return SectionCategory.OTHER
+
+def flatten_pdf_tree(outline_tree, paper_title=""):
+    """
+    Flattens the hierarchical outline tree into a list of chunks with metadata.
+    Adds chunk_index, section_category, hierarchy_level, etc.
+    """
+    chunks = []
+    global_chunk_idx = 0
+    
+    def _traverse(nodes, parent_title="", parent_category=SectionCategory.OTHER):
+        nonlocal global_chunk_idx
+        for node in nodes:
+            current_title = node["title"]
+            
+            # Strict Inheritance: If parent is a specific category (not OTHER), 
+            # children inherit it automatically without re-classification.
+            # This ensures 2.1, 2.2 etc. belong to the same category as 2.
+            if parent_category != SectionCategory.OTHER:
+                category = parent_category
+            else:
+                category = classify_section(current_title, paper_title)
+            
+            # If content exists, create a chunk
+            # Note: In the current implementation, 'content' is a list of strings (paragraphs/chunks)
+            # We might want to join them or treat each as a separate chunk.
+            # Let's treat each non-empty content string as a chunk for now.
+            
+            if "content" in node and node["content"]:
+                for content_part in node["content"]:
+                    if not content_part.strip():
+                        continue
+                        
+                    chunk = {
+                        "chunk_index": global_chunk_idx,
+                        "text": content_part,
+                        "section_title": current_title,
+                        "parent_section": parent_title,
+                        "section_category": int(category),
+                        "page_number": node["page"] + 1, # 1-based
+                        # hierarchy_level is not explicitly in node, but we could infer or pass it down
+                        # For now, let's assume the parser structure implies level via recursion depth if we tracked it
+                        # But since we are flattening a pre-built tree, we might need to adjust get_pdf_outline to store level
+                    }
+                    chunks.append(chunk)
+                    global_chunk_idx += 1
+            
+            # Recurse
+            _traverse(node["children"], current_title, category)
+
+    _traverse(outline_tree)
+    return chunks
 
 def get_pdf_outline(doc):
     """
@@ -171,3 +271,13 @@ def parse_pdf(pdf_path):
                         node["content"].append(cleaned_chunk)
 
     return outline_tree
+
+def parse_pdf_chunks(pdf_path):
+    """
+    Parses PDF and returns a flat list of chunks with structure metadata.
+    This is the main entry point for the RAG system.
+    """
+    tree = parse_pdf(pdf_path)
+    # We might want to extract the paper title from the first node or filename
+    # For now, let's leave it empty or infer later
+    return flatten_pdf_tree(tree)
