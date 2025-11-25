@@ -3,6 +3,8 @@ from typing import Any, Dict, List
 from logging_config import logger
 from rag.retriever import get_rag_client_by_provider
 from settings import settings
+from models import init_kimi_k2
+from prompts.template import apply_prompt_template
 
 
 class Searcher:
@@ -14,11 +16,52 @@ class Searcher:
     def __init__(self) -> None:
         self.rag_client = get_rag_client_by_provider(settings.rag_provider)
         self.top_k = settings.milvus_top_k
+        
+        if settings.enable_agentic_rag:
+            self.llm = init_kimi_k2()
+
+    def _refine_query(self, query: str) -> str:
+        """Uses LLM to refine the search query."""
+        try:
+            msgs = apply_prompt_template("rag_query_refiner", {"query": query})
+            # apply_prompt_template returns [{"role": "system", ...}]
+            # We need to append the user query if the template doesn't handle it fully, 
+            # but here the template uses {{query}} inside the system prompt or we should pass it as user message?
+            # Looking at rag_query_refiner.md, it has "User: {{query}}". 
+            # So the system prompt contains the input. 
+            # But usually we want a separate user message for the actual input if the system prompt is static instructions.
+            # However, apply_prompt_template renders the whole thing.
+            # Let's check apply_prompt_template implementation.
+            # It renders the template with params.
+            # So msgs[0]['content'] will have "User: <actual query>\nQuery:" at the end.
+            # This is fine for a completion-style prompt, but for ChatModel, we might want to structure it differently.
+            # But Kimi/OpenAI chat models handle this fine in system message or we can split it.
+            # For simplicity, let's trust the rendered prompt.
+            
+            response = self.llm.invoke(msgs)
+            # response is an AIMessage
+            refined = response.content
+            if isinstance(refined, str):
+                refined = refined.strip()
+            else:
+                # Handle case where content might be list (e.g. multimodal)
+                refined = str(refined).strip()
+                
+            logger.info(f"Agentic RAG: Refined query '{query}' -> '{refined}'")
+            return refined
+        except Exception as e:
+            logger.error(f"Query refinement failed: {e}")
+            return query
 
     def search(self, query: str, k: int | None = None) -> List[Dict[str, Any]]:
         """Query vector store and return normalized hits with ids."""
         k = k or self.top_k
-        raw_hits = self.rag_client.query_relevant_documents(query)
+        
+        search_query = query
+        if settings.enable_agentic_rag:
+            search_query = self._refine_query(query)
+            
+        raw_hits = self.rag_client.query_relevant_documents(search_query)
         hits: List[Dict[str, Any]] = []
         for idx, hit in enumerate(raw_hits[:k]):
             hits.append(
