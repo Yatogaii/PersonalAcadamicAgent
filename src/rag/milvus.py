@@ -181,7 +181,17 @@ class MilvusProvider(RAG):
     def insert_paper_chunks(self, doc_id: str, chunks: list[dict], paper_title: str = ""):
         """
         Inserts parsed chunks into Milvus.
-        chunks: List of dicts from pdf_parser.flatten_pdf_tree
+        
+        Args:
+            doc_id: 论文的唯一标识
+            chunks: 分块列表，可以是以下格式之一：
+                - List of dicts from pdf_parser.flatten_pdf_tree（传统格式）
+                - List of dicts with 'chunk_text', 'contextual_prefix' 等字段（ChunkResult.to_dict() 格式）
+            paper_title: 论文标题
+            
+        对于 contextual chunking:
+            如果 chunk 包含 'contextual_prefix' 字段且非空，
+            则使用 contextual_prefix + chunk_text 进行 embedding
         """
         if not chunks:
             return
@@ -191,15 +201,41 @@ class MilvusProvider(RAG):
         # Prepare data for insertion
         data_list = []
         
-        # Batch embedding could be optimized here, but for now we do one by one or small batches
-        # Let's assume embed_query can handle single strings. 
-        # If we want batching, we should check FeatureExtractor.
-        
         for chunk in chunks:
-            text = chunk["text"]
-            # Create a rich representation for embedding
-            # "Title: {Paper Title}\nSection: {Section Title}\nContent: {Text}"
-            embed_text = f"Title: {paper_title}\nSection: {chunk['section_title']}\nContent: {text}"
+            # 判断 chunk 格式并提取文本
+            # 格式 1: 传统 pdf_parser 格式 (含 'text' 字段)
+            # 格式 2: ChunkResult 格式 (含 'chunk_text' 字段)
+            if "chunk_text" in chunk:
+                # ChunkResult 格式
+                text = chunk["chunk_text"]
+                contextual_prefix = chunk.get("contextual_prefix", "")
+                # 使用 text_for_embedding（如果提供）或自己拼接
+                if "text_for_embedding" in chunk:
+                    embed_text = chunk["text_for_embedding"]
+                elif contextual_prefix:
+                    # Contextual chunking: 使用 prefix + chunk_text 进行 embedding
+                    embed_text = f"{contextual_prefix}\n\n{text}"
+                else:
+                    embed_text = f"Title: {paper_title}\nContent: {text}"
+                
+                # ChunkResult 格式可能没有结构化字段，使用默认值
+                chunk_index = chunk.get("id", chunk.get("chunk_index", 0))
+                section_category = chunk.get("section_category", 0)
+                parent_section = chunk.get("parent_section", "")
+                page_number = chunk.get("page_number", 1)
+                section_title = chunk.get("section_title", "")
+            else:
+                # 传统 pdf_parser 格式
+                text = chunk["text"]
+                section_title = chunk.get("section_title", "")
+                # Create a rich representation for embedding
+                embed_text = f"Title: {paper_title}\nSection: {section_title}\nContent: {text}"
+                
+                chunk_index = chunk["chunk_index"]
+                section_category = chunk["section_category"]
+                parent_section = chunk["parent_section"]
+                page_number = chunk["page_number"]
+            
             vector = self.embedding_client.embed_query(embed_text)
             
             entry = {
@@ -209,10 +245,10 @@ class MilvusProvider(RAG):
                 self.title_field: paper_title, # Store paper title for context
                 
                 # Structure fields
-                self.chunk_id_field: chunk["chunk_index"],
-                self.section_category_field: chunk["section_category"],
-                self.parent_section_field: chunk["parent_section"],
-                self.page_number_field: chunk["page_number"],
+                self.chunk_id_field: chunk_index,
+                self.section_category_field: section_category,
+                self.parent_section_field: parent_section,
+                self.page_number_field: page_number,
                 
                 # Optional fields (can be empty or inherited if we had them)
                 self.url_field: "",

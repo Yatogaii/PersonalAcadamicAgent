@@ -6,7 +6,7 @@ Usage:
     results = loader.load_papers(["doc_id_1", "doc_id_2"])
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -15,9 +15,11 @@ import time
 import httpx
 
 from logging_config import logger
+from settings import settings
 
 if TYPE_CHECKING:
     from rag.retriever import RAG
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 
 class LoadStatus(Enum):
@@ -59,14 +61,30 @@ class PDFLoader:
         "Referer": "https://www.google.com/",
     }
     
-    def __init__(self, rag_client: "RAG"):
+    def __init__(
+        self, 
+        rag_client: "RAG",
+        llm_client: Optional["BaseChatModel"] = None
+    ):
         self.rag_client = rag_client
+        self.llm_client = llm_client  # 用于 contextual chunking
         self.download_timeout = 120  # PDF 可能较大，给足够时间
         self.max_retries = 3
         self.retry_delay = 2  # 重试间隔秒数
         
         # 可选：本地缓存目录
         self.cache_dir: Path | None = None
+        
+        # Chunker 实例（延迟创建）
+        self._chunker = None
+    
+    @property
+    def chunker(self):
+        """获取 Chunker 实例（延迟创建）"""
+        if self._chunker is None:
+            from rag.chunker import Chunker
+            self._chunker = Chunker(llm_client=self.llm_client)
+        return self._chunker
     
     def set_cache_dir(self, cache_dir: str | Path):
         """设置 PDF 缓存目录"""
@@ -278,9 +296,13 @@ class PDFLoader:
         """
         解析 PDF 为 chunks。
         
-        使用 parser/pdf_parser.py 的解析函数
+        流程:
+        1. 使用 parser/pdf_parser.py 解析 PDF 获取结构化 chunks
+        2. 使用 Chunker 处理 chunks（根据 chunk_strategy 添加 contextual prefix 等）
+        3. 返回处理后的 chunks
         """
-        from parser.pdf_parser import parse_pdf, flatten_pdf_tree
+        from parser.pdf_parser import parse_pdf, flatten_pdf_tree, clean_text
+        from rag.chunker import ChunkResult
         
         # 写入临时文件（PyMuPDF 需要文件路径）
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
@@ -288,22 +310,54 @@ class PDFLoader:
             temp_path = f.name
         
         try:
-            # 解析 PDF 获取结构化树
+            # Step 1: 解析 PDF 获取结构化树
             outline_tree = parse_pdf(temp_path)
             
             if not outline_tree:
                 logger.warning("No outline/structure found in PDF, trying fallback...")
                 # Fallback: 尝试简单的全文提取
-                chunks = self._fallback_parse(temp_path, paper_title)
-                return chunks
+                raw_chunks = self._fallback_parse(temp_path, paper_title)
+            else:
+                # 扁平化为基础 chunks
+                raw_chunks = flatten_pdf_tree(outline_tree, paper_title)
             
-            # 扁平化为 chunks
-            chunks = flatten_pdf_tree(outline_tree, paper_title)
-            return chunks
+            if not raw_chunks:
+                return []
+            
+            # Step 2: 获取全文（用于 contextual chunking）
+            full_text = clean_text(self._extract_full_text(temp_path))
+            
+            # Step 3: 使用 Chunker 处理 chunks
+            chunk_results: list[ChunkResult] = self.chunker.process_chunks(
+                chunks=raw_chunks,
+                full_text=full_text,
+                title=paper_title
+            )
+            
+            # Step 4: 转换为字典格式
+            return [chunk.to_dict() for chunk in chunk_results]
             
         finally:
             # 清理临时文件
             Path(temp_path).unlink(missing_ok=True)
+    
+    def _extract_full_text(self, pdf_path: str) -> str:
+        """
+        提取 PDF 全文（用于 contextual chunking）
+        """
+        import fitz
+        
+        doc = fitz.open(pdf_path)
+        full_text_parts = []
+        
+        for page_num in range(doc.page_count):
+            page = doc[page_num]
+            text: str = page.get_text("text")  # type: ignore
+            if text and text.strip():
+                full_text_parts.append(text.strip())
+        
+        doc.close()
+        return "\n\n".join(full_text_parts)
     
     def _fallback_parse(self, pdf_path: str, paper_title: str) -> list[dict]:
         """
@@ -358,6 +412,17 @@ class PDFLoader:
         logger.success(f"Inserted {len(chunks)} chunks for doc_id: {doc_id[:8]}...")
 
 
-def get_pdf_loader(rag_client: "RAG") -> PDFLoader:
-    """工厂函数，获取 PDF Loader 实例"""
-    return PDFLoader(rag_client)
+def get_pdf_loader(
+    rag_client: "RAG",
+    llm_client: Optional["BaseChatModel"] = None
+) -> PDFLoader:
+    """
+    工厂函数，获取 PDF Loader 实例
+    
+    Args:
+        rag_client: RAG 客户端
+        llm_client: LLM 客户端（用于 contextual chunking，可选）
+                   如果 settings.chunk_strategy == "contextual" 但未提供 llm_client，
+                   将回退到 paragraph 策略
+    """
+    return PDFLoader(rag_client, llm_client=llm_client)
