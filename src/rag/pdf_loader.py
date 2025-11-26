@@ -6,7 +6,7 @@ Usage:
     results = loader.load_papers(["doc_id_1", "doc_id_2"])
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -20,6 +20,9 @@ from settings import settings
 if TYPE_CHECKING:
     from rag.retriever import RAG
     from langchain_core.language_models.chat_models import BaseChatModel
+
+# 回调函数类型：(doc_id, chunks, title) -> None
+ChunksProcessedCallback = Callable[[str, list[dict], str], None]
 
 
 class LoadStatus(Enum):
@@ -64,10 +67,12 @@ class PDFLoader:
     def __init__(
         self, 
         rag_client: "RAG",
-        llm_client: Optional["BaseChatModel"] = None
+        llm_client: Optional["BaseChatModel"] = None,
+        on_chunks_processed: Optional["ChunksProcessedCallback"] = None
     ):
         self.rag_client = rag_client
         self.llm_client = llm_client  # 用于 contextual chunking
+        self.on_chunks_processed = on_chunks_processed  # 可选回调：chunks 处理完成后调用
         self.download_timeout = 120  # PDF 可能较大，给足够时间
         self.max_retries = 3
         self.retry_delay = 2  # 重试间隔秒数
@@ -182,7 +187,14 @@ class PDFLoader:
         
         logger.info(f"Parsed {len(chunks)} chunks from PDF")
         
-        # Step 5: 插入 chunks
+        # Step 5: 调用回调（如果设置了）- 在插入前调用，便于评估模块保存数据
+        if self.on_chunks_processed:
+            try:
+                self.on_chunks_processed(doc_id, chunks, title)
+            except Exception as e:
+                logger.warning(f"on_chunks_processed callback failed: {e}")
+        
+        # Step 6: 插入 chunks
         try:
             self._insert_chunks(doc_id, chunks, title)
         except Exception as e:
