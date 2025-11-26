@@ -34,7 +34,7 @@ class PaperSource:
 class DataExporter:
     """从业务库导出数据"""
     
-    def __init__(self, rag_client: "MilvusProvider", config: EvaluationConfig = None):
+    def __init__(self, rag_client: "MilvusProvider", config: Optional[EvaluationConfig] = None):
         """
         Args:
             rag_client: 业务库的 MilvusProvider 客户端

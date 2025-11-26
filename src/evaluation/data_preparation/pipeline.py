@@ -1,161 +1,255 @@
 """
-Evaluation Pipeline
+Data Preparation Pipeline
 
-整合数据准备的完整流程
+整合数据准备的完整流程:
+1. 从业务库导出论文元数据
+2. 使用 PDFLoader 下载 + 解析 + 入库（复用现有逻辑）
+3. 通过回调保存 chunks 到本地（供 QA 生成使用）
 """
 
+import json
 from typing import TYPE_CHECKING, Optional
 from pathlib import Path
+from dataclasses import dataclass, field
+
+from logging_config import logger
 
 if TYPE_CHECKING:
-    from rag.retriever import RAG
+    from rag.milvus import MilvusProvider
     from langchain_core.language_models.chat_models import BaseChatModel
 
 from evaluation.config import EvaluationConfig, ChunkStrategy
-from evaluation.data_preparation import (
-    DataExporter,
-    PDFDownloader,
-    ChunkProcessor,
-    CollectionBuilder,
-    PaperSource,
-)
+from evaluation.data_preparation.data_exporter import DataExporter, PaperSource
+from evaluation.data_preparation.collection_builder import CollectionBuilder
+
+
+@dataclass
+class PipelineResult:
+    """Pipeline 执行结果"""
+    papers_exported: int = 0
+    papers_processed: dict[str, int] = field(default_factory=dict)  # strategy -> count
+    papers_success: dict[str, int] = field(default_factory=dict)
+    papers_failed: dict[str, int] = field(default_factory=dict)
+    chunks_saved: dict[str, int] = field(default_factory=dict)
 
 
 class DataPreparationPipeline:
     """
     数据准备流水线
     
-    整合从导出到入库的完整流程
+    核心思路：复用 PDFLoader，通过以下方式适配评估场景：
+    1. 使用 CollectionBuilder.use_chunk_strategy() 切换 settings
+    2. 使用 PDFLoader 的 on_chunks_processed 回调保存 chunks 到本地
     """
     
     def __init__(
         self,
-        source_rag_client: "RAG",
+        source_rag_client: "MilvusProvider",
         llm_client: Optional["BaseChatModel"] = None,
         config: Optional[EvaluationConfig] = None
     ):
         """
         Args:
-            source_rag_client: 业务库 RAG 客户端
+            source_rag_client: 业务库 MilvusProvider 客户端
             llm_client: LLM 客户端 (用于 Contextual Chunking)
             config: 评估配置
         """
         self.config = config or EvaluationConfig()
-        self.config.ensure_dirs()
+        self.source_rag_client = source_rag_client
+        self.llm_client = llm_client
         
-        # 初始化各组件
+        # 确保目录存在
+        self.config.data_dir.mkdir(parents=True, exist_ok=True)
+        self.config.chunks_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 初始化组件
         self.exporter = DataExporter(source_rag_client, self.config)
-        self.downloader = PDFDownloader(self.config)
-        self.chunk_processor = ChunkProcessor(self.config, llm_client)
         self.collection_builder = CollectionBuilder(self.config)
+        
+        # 用于跟踪保存的 chunks
+        self._chunks_saved_count = 0
     
-    def run_full_pipeline(
+    def run(
         self,
         strategies: Optional[list[ChunkStrategy]] = None,
         sample_size: Optional[int] = None,
-        skip_download: bool = False,
-        skip_existing_chunks: bool = True
-    ) -> dict:
+        drop_existing: bool = False,
+    ) -> PipelineResult:
         """
-        运行完整的数据准备流程
+        运行数据准备流程
         
         Args:
             strategies: 要处理的分块策略列表，默认全部
-            sample_size: 抽样数量
-            skip_download: 是否跳过 PDF 下载（使用已有的）
-            skip_existing_chunks: 是否跳过已缓存的 chunks
+            sample_size: 抽样数量（None = 全量）
+            drop_existing: 是否删除已有的评估 collection
             
         Returns:
-            处理结果统计
+            PipelineResult
         """
         strategies = strategies or self.config.chunk_strategies
-        
-        result = {
-            "papers_exported": 0,
-            "pdfs_downloaded": 0,
-            "chunks_processed": {},
-            "records_inserted": {},
-        }
+        result = PipelineResult()
         
         # Step 1: 导出论文元数据
-        print("=" * 60)
-        print("Step 1: Exporting papers from source database...")
-        print("=" * 60)
-        papers = self._step_export(sample_size)
-        result["papers_exported"] = len(papers)
-        print(f"Exported {len(papers)} papers\n")
+        logger.info("=" * 60)
+        logger.info("Step 1: Exporting papers from source database...")
+        logger.info("=" * 60)
         
-        # Step 2: 下载 PDF
-        if not skip_download:
-            print("=" * 60)
-            print("Step 2: Downloading PDFs...")
-            print("=" * 60)
-            download_stats = self._step_download(papers)
-            result["pdfs_downloaded"] = download_stats.get("success", 0)
-            print(f"Downloaded {result['pdfs_downloaded']} PDFs\n")
-        else:
-            print("Step 2: Skipping PDF download\n")
+        papers = self._export_papers(sample_size)
+        result.papers_exported = len(papers)
+        logger.info(f"Exported {len(papers)} papers with pdf_url")
         
-        # Step 3 & 4: 分块 + 入库 (按策略分别处理)
+        if not papers:
+            logger.warning("No papers to process!")
+            return result
+        
+        # Step 2: 对每种策略，处理论文
         for strategy in strategies:
-            print("=" * 60)
-            print(f"Step 3-4: Processing chunks [{strategy.value}]...")
-            print("=" * 60)
+            logger.info("=" * 60)
+            logger.info(f"Step 2: Processing with strategy [{strategy.value}]...")
+            logger.info("=" * 60)
             
-            # 创建 collection
-            collection_name = self.collection_builder.create_collection(
-                strategy, drop_if_exists=True
-            )
-            print(f"Created collection: {collection_name}")
-            
-            # 处理 chunks
-            chunk_caches = self._step_chunk(papers, strategy, skip_existing_chunks)
-            result["chunks_processed"][strategy.value] = sum(
-                len(c.chunks) for c in chunk_caches.values()
+            stats = self._process_papers_for_strategy(
+                papers=papers,
+                strategy=strategy,
+                drop_existing=drop_existing
             )
             
-            # 入库
-            inserted = self.collection_builder.insert_batch(
-                list(chunk_caches.values()), strategy
-            )
-            result["records_inserted"][strategy.value] = inserted
-            
-            print(f"Processed {result['chunks_processed'][strategy.value]} chunks")
-            print(f"Inserted {inserted} records\n")
+            result.papers_processed[strategy.value] = stats["processed"]
+            result.papers_success[strategy.value] = stats["success"]
+            result.papers_failed[strategy.value] = stats["failed"]
+            result.chunks_saved[strategy.value] = stats["chunks_saved"]
         
-        print("=" * 60)
-        print("Data preparation complete!")
-        print("=" * 60)
+        # 打印总结
         self._print_summary(result)
         
         return result
     
-    def _step_export(self, sample_size: Optional[int]) -> list[PaperSource]:
-        """Step 1: 导出论文"""
-        # TODO: 实现
-        raise NotImplementedError
+    def _export_papers(self, sample_size: Optional[int]) -> list[PaperSource]:
+        """导出论文元数据"""
+        # 尝试从文件加载
+        if self.config.source_file.exists():
+            logger.info(f"Loading papers from existing file: {self.config.source_file}")
+            return self.exporter.load_from_file()
+        
+        # 从数据库导出
+        papers = self.exporter.export(sample_size=sample_size)
+        
+        # 保存到文件
+        self.exporter.export_to_file()
+        
+        return papers
     
-    def _step_download(self, papers: list[PaperSource]) -> dict:
-        """Step 2: 下载 PDF"""
-        # TODO: 实现
-        raise NotImplementedError
-    
-    def _step_chunk(
+    def _process_papers_for_strategy(
         self,
         papers: list[PaperSource],
         strategy: ChunkStrategy,
-        skip_existing: bool
+        drop_existing: bool
     ) -> dict:
-        """Step 3: 分块处理"""
-        # TODO: 实现
-        raise NotImplementedError
+        """
+        使用指定策略处理所有论文
+        
+        核心：通过 Context Manager 切换 settings，然后复用 PDFLoader
+        """
+        from rag.milvus import MilvusProvider
+        from rag.pdf_loader import PDFLoader, LoadStatus
+        
+        stats = {"processed": 0, "success": 0, "failed": 0, "chunks_saved": 0}
+        
+        # 1. 创建评估 collection
+        self.collection_builder.create_collection(
+            strategy, 
+            drop_if_exists=drop_existing
+        )
+        
+        # 2. 准备 chunks 保存目录
+        chunks_dir = self.config.chunks_dir / strategy.value
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 3. 创建保存 chunks 的回调
+        self._chunks_saved_count = 0
+        
+        def save_chunks_callback(doc_id: str, chunks: list[dict], title: str):
+            """保存 chunks 到本地文件"""
+            save_path = chunks_dir / f"{doc_id}.json"
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "doc_id": doc_id,
+                    "title": title,
+                    "strategy": strategy.value,
+                    "chunks": chunks
+                }, f, ensure_ascii=False, indent=2)
+            self._chunks_saved_count += 1
+        
+        # 4. 使用 Context Manager 切换到评估 collection 和 chunk 策略
+        with self.collection_builder.use_chunk_strategy(strategy):
+            # 创建新的 MilvusProvider（会使用修改后的 settings）
+            eval_rag_client = MilvusProvider()
+            
+            # 创建 PDFLoader，传入回调
+            pdf_loader = PDFLoader(
+                rag_client=eval_rag_client,
+                llm_client=self.llm_client,
+                on_chunks_processed=save_chunks_callback
+            )
+            
+            # 设置 PDF 缓存目录（跨策略共享）
+            pdf_loader.set_cache_dir(self.config.pdf_dir)
+            
+            # 获取所有 doc_ids
+            doc_ids = [p.doc_id for p in papers]
+            
+            # 批量处理
+            logger.info(f"Processing {len(doc_ids)} papers...")
+            results = pdf_loader.load_papers(doc_ids)
+            
+            # 统计结果
+            for doc_id, load_result in results.items():
+                stats["processed"] += 1
+                if load_result.status == LoadStatus.SUCCESS:
+                    stats["success"] += 1
+                elif load_result.status == LoadStatus.ALREADY_EXISTS:
+                    stats["success"] += 1  # 已存在也算成功
+                else:
+                    stats["failed"] += 1
+        
+        stats["chunks_saved"] = self._chunks_saved_count
+        
+        logger.info(f"Strategy [{strategy.value}]: "
+                   f"processed={stats['processed']}, "
+                   f"success={stats['success']}, "
+                   f"failed={stats['failed']}, "
+                   f"chunks_saved={stats['chunks_saved']}")
+        
+        return stats
     
-    def _print_summary(self, result: dict) -> None:
+    def _print_summary(self, result: PipelineResult) -> None:
         """打印处理结果摘要"""
-        print(f"\nSummary:")
-        print(f"  Papers exported: {result['papers_exported']}")
-        print(f"  PDFs downloaded: {result['pdfs_downloaded']}")
-        for strategy, count in result['chunks_processed'].items():
-            print(f"  Chunks [{strategy}]: {count}")
-        for strategy, count in result['records_inserted'].items():
-            print(f"  Records [{strategy}]: {count}")
+        logger.info("=" * 60)
+        logger.info("Pipeline Complete!")
+        logger.info("=" * 60)
+        logger.info(f"Papers exported: {result.papers_exported}")
+        
+        for strategy in result.papers_processed.keys():
+            logger.info(f"\n[{strategy}]:")
+            logger.info(f"  Processed: {result.papers_processed.get(strategy, 0)}")
+            logger.info(f"  Success: {result.papers_success.get(strategy, 0)}")
+            logger.info(f"  Failed: {result.papers_failed.get(strategy, 0)}")
+            logger.info(f"  Chunks saved: {result.chunks_saved.get(strategy, 0)}")
+    
+    # ============== 单独步骤方法（便于调试） ==============
+    
+    def export_only(self, sample_size: Optional[int] = None) -> list[PaperSource]:
+        """只执行导出步骤"""
+        return self.exporter.export(sample_size=sample_size)
+    
+    def get_collection_stats(self, strategy: ChunkStrategy) -> Optional[dict]:
+        """获取指定策略的 collection 统计"""
+        stats = self.collection_builder.get_collection_stats(strategy)
+        if stats:
+            return {
+                "name": stats.name,
+                "total_records": stats.total_records,
+                "total_papers": stats.total_papers,
+                "index_type": stats.index_type,
+            }
+        return None
