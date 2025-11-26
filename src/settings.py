@@ -73,6 +73,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8"
     )
 
+    OLLAMA_API_URL: str = "http://localhost:11434"
+
 
 # create a singleton settings instance to import across the project
 settings = Settings()

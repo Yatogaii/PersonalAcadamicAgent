@@ -23,3 +23,9 @@ def init_kimi_k2() -> BaseChatModel:
                              base_url="https://api.moonshot.cn/v1",
                              api_key=settings.KIMI_API_KEY)
     return model
+
+def init_ollama_model(model_name="qwen3:8b"):
+    model = init_chat_model(model=model_name,
+                             model_provider="ollama",
+                             base_url=settings.OLLAMA_API_URL)
+    return model
