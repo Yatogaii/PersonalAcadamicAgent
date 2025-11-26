@@ -2,7 +2,7 @@
 
 ## 概述
 
-本模块用于评估 RAG 系统的检索和生成质量。
+本模块用于评估 RAG 系统的检索和生成质量，支持多种配置对比实验。
 
 ## 架构
 
@@ -10,80 +10,155 @@
 evaluation/
 ├── __init__.py
 ├── README.md
-├── rag_evaluator.py          # 评估指标计算 (已实现)
+├── config.py                 # 配置定义
+├── schemas.py                # 数据结构定义
+├── pipeline.py               # 完整评估流水线
+├── runner.py                 # 评估执行器
+├── rag_evaluator.py          # 评估指标计算
 │
-├── annotation/               # 阶段 1: LLM 标注
+├── data_preparation/         # 数据准备模块
 │   ├── __init__.py
-│   ├── paper_annotator.py    # Paper-level 标注器
-│   ├── section_annotator.py  # Section-level 标注器
-│   └── prompts.py            # 标注用的 prompt 模板
+│   ├── data_exporter.py      # 从业务库导出数据
+│   ├── pdf_downloader.py     # PDF 下载器
+│   ├── chunk_processor.py    # 分块处理器 (paragraph/contextual)
+│   ├── collection_builder.py # Collection 构建器
+│   ├── pipeline.py           # 数据准备流水线
+│   └── prompts.py            # Contextual Chunking prompt
 │
-├── qa_generation/            # 阶段 2: QA 生成
+├── annotation/               # 论文标注模块
 │   ├── __init__.py
-│   ├── qa_generator.py       # QA pairs 生成器
-│   └── prompts.py            # QA 生成的 prompt 模板
+│   ├── paper_annotator.py    # Paper-level 标注
+│   ├── section_annotator.py  # Section-level 标注
+│   └── prompts.py            # 标注 prompt 模板
 │
-├── runner.py                 # 阶段 3: 评估执行器
-│
-└── schemas.py                # 数据结构定义
+└── qa_generation/            # QA 生成模块
+    ├── __init__.py
+    ├── qa_generator.py       # QA pairs 生成器
+    └── prompts.py            # QA 生成 prompt 模板
 ```
 
-## 工作流程
+## 实验设计
+
+### 变量
+
+| 变量 | 选项 | 隔离方式 |
+|------|------|----------|
+| Chunk 策略 | paragraph / contextual | Collection 级别 |
+| Index 策略 | FLAT / HNSW / IVF | Index 级别（rebuild） |
+| Agentic RAG | 开 / 关 | 代码逻辑 |
+
+### Collection 设计
+
+```
+papers_eval_paragraph    # 传统段落分块
+papers_eval_contextual   # Contextual Chunking
+```
+
+### 评估矩阵 (12 种实验)
+
+| Chunk | Index | Agentic | 实验名 |
+|-------|-------|---------|--------|
+| paragraph | FLAT | ❌ | para_flat |
+| paragraph | FLAT | ✅ | para_flat_agentic |
+| paragraph | HNSW | ❌ | para_hnsw |
+| paragraph | HNSW | ✅ | para_hnsw_agentic |
+| paragraph | IVF | ❌ | para_ivf |
+| paragraph | IVF | ✅ | para_ivf_agentic |
+| contextual | FLAT | ❌ | ctx_flat |
+| contextual | FLAT | ✅ | ctx_flat_agentic |
+| contextual | HNSW | ❌ | ctx_hnsw |
+| contextual | HNSW | ✅ | ctx_hnsw_agentic |
+| contextual | IVF | ❌ | ctx_ivf |
+| contextual | IVF | ✅ | ctx_ivf_agentic |
+
+## 数据流
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 阶段 1: 标注 (Annotation)                                    │
-│                                                              │
-│   PaperAnnotator.annotate_all()                             │
-│     → 生成 saved_summaries/papers_index.jsonl               │
-│                                                              │
-│   SectionAnnotator.annotate_loaded_papers()                 │
-│     → 更新 papers_index.jsonl 的 section 字段               │
+│ Step 1: 数据准备                                            │
+│   业务库 → 导出 → 下载 PDF → 分块 → 入库                     │
+│   输出: papers_eval_* collections                           │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ 阶段 2: QA 生成 (QA Generation)                              │
-│                                                              │
-│   QAGenerator.generate()                                     │
-│     → 生成 evaluation/ground_truth.json                     │
+│ Step 2: 论文标注                                            │
+│   LLM 为每篇论文生成 summary, keywords, research_area       │
+│   输出: evaluation/data/papers_summaries.jsonl              │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ 阶段 3: 评估 (Evaluation)                                    │
-│                                                              │
-│   EvaluationRunner.run_all()                                │
-│     → 输出评估报告                                           │
+│ Step 3: QA 生成                                             │
+│   基于标注生成 100 个 QA pairs (Easy/Medium/Hard)           │
+│   输出: evaluation/data/ground_truth.json                   │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Step 4: 评估                                                │
+│   对 12 种实验配置分别运行评估                               │
+│   输出: evaluation/data/reports/                            │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## 评估指标
+
+### L1: Paper Discovery
+- Precision@K, Recall@K
+- MRR (Mean Reciprocal Rank)
+- Hit Rate
+- Latency
+
+### L2: Section Retrieval
+- Method Precision/Recall
+- Evaluation Precision/Recall
+
+### L3: End-to-End QA
+- Accuracy (by difficulty)
+- Answer Relevance
+- Faithfulness
 
 ## 使用方式
 
 ```python
-# 阶段 1: 标注
-from evaluation.annotation import PaperAnnotator, SectionAnnotator
+from evaluation.pipeline import EvaluationPipeline
+from evaluation.config import EvaluationConfig
 
-annotator = PaperAnnotator(rag_client, llm_client)
-annotator.annotate_all()  # 标注所有论文
+# 配置
+config = EvaluationConfig(
+    sample_size=100,  # 抽样 100 篇论文
+    num_qa_pairs=50,  # 生成 50 个问题
+)
 
-section_annotator = SectionAnnotator(rag_client, llm_client)
-section_annotator.annotate_loaded_papers()  # 标注已加载 PDF 的论文
+# 初始化
+pipeline = EvaluationPipeline(
+    source_rag_client=rag,
+    llm_client=llm,
+    config=config
+)
 
-# 阶段 2: 生成 QA
-from evaluation.qa_generation import QAGenerator
+# 运行完整流程
+report = pipeline.run_full_pipeline()
 
-generator = QAGenerator(llm_client)
-generator.generate(num_questions=100)
-
-# 阶段 3: 运行评估
-from evaluation.runner import EvaluationRunner
-
-runner = EvaluationRunner(rag_client)
-report = runner.run_all()
-runner.print_report(report)
+# 或分步运行
+papers = pipeline.step1_prepare_data()
+annotations = pipeline.step2_annotate_papers(papers)
+ground_truth = pipeline.step3_generate_qa(annotations)
+report = pipeline.step4_run_evaluation(ground_truth)
 ```
 
-## 数据文件
+## 数据目录
 
-- `saved_summaries/papers_index.jsonl` - 论文标注结果
-- `evaluation/ground_truth.json` - QA 测试集
-- `evaluation/reports/` - 评估报告输出目录
+```
+evaluation/data/
+├── papers_source.jsonl       # 导出的论文元数据
+├── pdfs/                     # 下载的 PDF 文件
+│   └── {doc_id}.pdf
+├── chunks/                   # 分块缓存
+│   ├── paragraph/
+│   │   └── {doc_id}.jsonl
+│   └── contextual/
+│       └── {doc_id}.jsonl
+├── papers_summaries.jsonl    # 论文标注结果
+├── ground_truth.json         # QA 测试集
+└── reports/                  # 评估报告
+    └── report_{timestamp}.json
+```

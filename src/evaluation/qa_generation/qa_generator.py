@@ -4,13 +4,15 @@ QA Generator
 负责从标注结果生成测试用的 QA pairs
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from pathlib import Path
+import json
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
-from evaluation.schemas import QAPair, GroundTruth, Difficulty, AnswerSource
+from evaluation.schemas import QAPair, GroundTruth, Difficulty, AnswerSource, PaperAnnotation
+from evaluation.config import EvaluationConfig
 
 
 class QAGenerator:
@@ -19,46 +21,47 @@ class QAGenerator:
     def __init__(
         self,
         llm_client: "BaseChatModel",
-        index_path: str = "saved_summaries/papers_index.jsonl",
-        output_path: str = "src/evaluation/ground_truth.json"
+        config: Optional[EvaluationConfig] = None
     ):
         """
         Args:
             llm_client: LLM 客户端
-            index_path: 标注文件路径
-            output_path: Ground Truth 输出路径
+            config: 评估配置
         """
         self.llm = llm_client
-        self.index_path = Path(index_path)
-        self.output_path = Path(output_path)
+        self.config = config or EvaluationConfig()
+        self.config.ensure_dirs()
     
     def generate(
         self,
-        num_questions: int = 100,
-        difficulty_distribution: dict = None,
-        source_distribution: dict = None
+        annotations: list[PaperAnnotation],
+        num_questions: Optional[int] = None,
+        difficulty_distribution: Optional[dict] = None
     ) -> GroundTruth:
         """
         生成 QA pairs
         
         Args:
-            num_questions: 生成的问题数量
-            difficulty_distribution: 难度分布，如 {"easy": 0.3, "medium": 0.5, "hard": 0.2}
-            source_distribution: 来源分布，如 {"abstract": 0.3, "method": 0.4, "evaluation": 0.3}
+            annotations: 论文标注列表
+            num_questions: 生成的问题数量，默认使用 config
+            difficulty_distribution: 难度分布，默认使用 config
             
         Returns:
             GroundTruth 对象
         """
+        num_questions = num_questions or self.config.num_qa_pairs
+        difficulty_distribution = difficulty_distribution or self.config.difficulty_distribution
+        
         # TODO: 实现
-        # 1. 加载所有标注
-        # 2. 按 research_area 分组
-        # 3. 为每组生成 QA
+        # 1. 按 research_area 分组
+        # 2. 计算各难度的问题数量
+        # 3. 生成 Easy / Medium / Hard 问题
         # 4. 汇总并保存
         raise NotImplementedError
     
     def generate_easy_questions(
         self,
-        annotations: list,
+        annotations: list[PaperAnnotation],
         count: int
     ) -> list[QAPair]:
         """
@@ -72,7 +75,7 @@ class QAGenerator:
     
     def generate_medium_questions(
         self,
-        annotations: list,
+        annotations: list[PaperAnnotation],
         count: int
     ) -> list[QAPair]:
         """
@@ -86,7 +89,7 @@ class QAGenerator:
     
     def generate_hard_questions(
         self,
-        annotations: list,
+        annotations: list[PaperAnnotation],
         count: int
     ) -> list[QAPair]:
         """
@@ -98,12 +101,22 @@ class QAGenerator:
         # TODO: 实现
         raise NotImplementedError
     
-    def load_annotations(self) -> list:
-        """加载标注结果"""
+    def save(self, ground_truth: GroundTruth) -> Path:
+        """
+        保存 Ground Truth 到 JSON 文件
+        
+        Returns:
+            保存的文件路径
+        """
         # TODO: 实现
         raise NotImplementedError
     
-    def save(self, ground_truth: GroundTruth) -> None:
-        """保存 Ground Truth 到 JSON 文件"""
+    def load(self) -> Optional[GroundTruth]:
+        """
+        从文件加载 Ground Truth
+        
+        Returns:
+            GroundTruth 对象，如果文件不存在返回 None
+        """
         # TODO: 实现
         raise NotImplementedError
