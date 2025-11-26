@@ -7,10 +7,10 @@ RAG 评估框架
 - config: 评估配置
 - schemas: 数据结构定义
 - data_preparation/: 数据准备模块
-- annotation/: LLM 标注模块
-- qa_generation/: QA 生成模块
-- runner: 评估执行器
-- pipeline: 完整评估流水线
+- annotation/: LLM 标注模块 (TODO)
+- qa_generation/: QA 生成模块 (TODO)
+- runner: 评估执行器 (TODO)
+- pipeline: 完整评估流水线 (TODO)
 """
 
 from .config import (
@@ -32,16 +32,20 @@ from .schemas import (
     L3Result,
 )
 
-from .rag_evaluator import (
-    RAGEvaluator,
-    EvaluationResult,
-    AggregatedMetrics,
-    SemanticSimilarityEvaluator,
-    NDCGCalculator,
+# 已实现的模块
+from .data_preparation import (
+    DataExporter,
+    PaperSource,
+    CollectionBuilder,
+    CollectionStats,
+    DataPreparationPipeline,
+    PipelineResult,
 )
 
-from .runner import EvaluationRunner
-from .pipeline import EvaluationPipeline
+# TODO: 待实现
+# from .rag_evaluator import ...
+# from .runner import EvaluationRunner
+# from .pipeline import EvaluationPipeline
 
 __all__ = [
     # 配置
@@ -59,13 +63,11 @@ __all__ = [
     "L1Result",
     "L2Result",
     "L3Result",
-    # 评估器
-    "RAGEvaluator",
-    "EvaluationResult", 
-    "AggregatedMetrics",
-    "SemanticSimilarityEvaluator",
-    "NDCGCalculator",
-    # Runner & Pipeline
-    "EvaluationRunner",
-    "EvaluationPipeline",
+    # Data Preparation
+    "DataExporter",
+    "PaperSource",
+    "CollectionBuilder",
+    "CollectionStats",
+    "DataPreparationPipeline",
+    "PipelineResult",
 ]

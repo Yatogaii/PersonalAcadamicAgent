@@ -126,16 +126,23 @@ class DataPreparationPipeline:
     
     def _export_papers(self, sample_size: Optional[int]) -> list[PaperSource]:
         """导出论文元数据"""
+        import random
+        
         # 尝试从文件加载
         if self.config.source_file.exists():
             logger.info(f"Loading papers from existing file: {self.config.source_file}")
-            return self.exporter.load_from_file()
+            papers = self.exporter.load_from_file()
+        else:
+            # 从数据库导出（全量）
+            papers = self.exporter.export()
+            # 保存到文件
+            self.exporter.export_to_file()
         
-        # 从数据库导出
-        papers = self.exporter.export(sample_size=sample_size)
-        
-        # 保存到文件
-        self.exporter.export_to_file()
+        # 如果需要抽样
+        if sample_size and sample_size < len(papers):
+            random.seed(42)
+            papers = random.sample(papers, sample_size)
+            logger.info(f"Sampled {len(papers)} papers from {len(self.exporter.load_from_file())}")
         
         return papers
     
@@ -149,6 +156,9 @@ class DataPreparationPipeline:
         使用指定策略处理所有论文
         
         核心：通过 Context Manager 切换 settings，然后复用 PDFLoader
+        
+        注意：需要先把 paper-level 记录复制到评估 collection，
+        因为 PDFLoader.get_paper_metadata() 会从当前 collection 查询
         """
         from rag.milvus import MilvusProvider
         from rag.pdf_loader import PDFLoader, LoadStatus
@@ -184,6 +194,11 @@ class DataPreparationPipeline:
         with self.collection_builder.use_chunk_strategy(strategy):
             # 创建新的 MilvusProvider（会使用修改后的 settings）
             eval_rag_client = MilvusProvider()
+            
+            # 5. 复制 paper-level 记录到评估 collection
+            # PDFLoader 需要从 collection 查询 metadata
+            logger.info(f"Copying {len(papers)} paper-level records to eval collection...")
+            self._copy_paper_records(papers, eval_rag_client)
             
             # 创建 PDFLoader，传入回调
             pdf_loader = PDFLoader(
@@ -235,6 +250,37 @@ class DataPreparationPipeline:
             logger.info(f"  Success: {result.papers_success.get(strategy, 0)}")
             logger.info(f"  Failed: {result.papers_failed.get(strategy, 0)}")
             logger.info(f"  Chunks saved: {result.chunks_saved.get(strategy, 0)}")
+    
+    def _copy_paper_records(self, papers: list[PaperSource], eval_rag_client: "MilvusProvider"):
+        """
+        复制 paper-level 记录到评估 collection
+        
+        PDFLoader 需要从 collection 查询 metadata（pdf_url 等）
+        """
+        for paper in papers:
+            # 使用 insert_document 插入 paper-level 记录
+            # 但需要保持原有的 doc_id
+            eval_rag_client.client.insert(
+                collection_name=eval_rag_client.collection,
+                data={
+                    eval_rag_client.doc_id_field: paper.doc_id,
+                    eval_rag_client.vector_field: eval_rag_client.embedding_client.embed_query(
+                        f"Title: {paper.title}\nAbstract: {paper.abstract}"
+                    ),
+                    eval_rag_client.title_field: paper.title,
+                    eval_rag_client.text_field: paper.abstract,
+                    eval_rag_client.url_field: paper.url,
+                    eval_rag_client.pdf_url_field: paper.pdf_url,
+                    eval_rag_client.conference_name_field: paper.conference_name,
+                    eval_rag_client.conference_year_field: paper.conference_year,
+                    eval_rag_client.conference_round_field: paper.conference_round,
+                    eval_rag_client.chunk_id_field: -1,  # paper-level
+                    eval_rag_client.section_category_field: 0,
+                    eval_rag_client.parent_section_field: "",
+                    eval_rag_client.page_number_field: 1,
+                }
+            )
+        logger.info(f"Copied {len(papers)} paper-level records")
     
     # ============== 单独步骤方法（便于调试） ==============
     
