@@ -4,7 +4,7 @@ from logging_config import logger
 from rag.retriever import get_rag_client_by_provider
 from rag.pdf_loader import PDFLoader, LoadStatus
 from settings import settings
-from models import init_kimi_k2
+from models import init_kimi_k2, init_ollama_model
 from prompts.template import apply_prompt_template
 from langchain.tools import tool
 from langchain.agents import create_agent
@@ -22,7 +22,11 @@ def _get_rag_client():
 def _get_pdf_loader():
     global _pdf_loader
     if _pdf_loader is None:
-        _pdf_loader = PDFLoader(_get_rag_client())
+        if settings.chunk_strategy == "contextual":
+            logger.info("Initializing PDFLoader with contextual chunking strategy.")
+            _pdf_loader = PDFLoader(_get_rag_client(), llm_client=init_ollama_model())
+        else:
+            _pdf_loader = PDFLoader(_get_rag_client())
     return _pdf_loader
 
 
