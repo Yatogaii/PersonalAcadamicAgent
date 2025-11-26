@@ -59,8 +59,9 @@ class QAPair:
     
     # Ground Truth
     expected_doc_ids: list[str]          # 应该检索到的论文
-    answer_source: AnswerSource          # 答案来源 section
-    reference_answer: str                # 参考答案
+    expected_chunk_ids: list[int] = None # 应该检索到的 chunk (可选，None 表示 paper-level)
+    answer_source: AnswerSource = AnswerSource.ABSTRACT
+    reference_answer: str = ""
     
     # 可选
     expected_section_category: Optional[int] = None  # 期望的 section_category
@@ -96,7 +97,11 @@ class L1Result:
 
 @dataclass
 class L2Result:
-    """L2: Section Retrieval 评估结果"""
+    """L2: Section/Chunk Retrieval 评估结果"""
+    # Chunk-level 指标
+    chunk_precision: float = 0.0    # 检索到的 chunk 是否是期望的
+    chunk_recall: float = 0.0       # 期望的 chunk 是否被检索到
+    
     # 按 section 类型的准确率
     method_precision: float = 0.0
     method_recall: float = 0.0
