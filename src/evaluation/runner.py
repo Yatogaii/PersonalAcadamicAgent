@@ -11,6 +11,7 @@ from dataclasses import asdict
 import uuid
 import json
 import time
+import re
 
 from logging_config import logger
 
@@ -23,6 +24,10 @@ from evaluation.schemas import (
     L1Result, L2Result, L3Result, Difficulty, AnswerSource
 )
 from evaluation.config import EvaluationConfig
+from evaluation.prompts.l3_evaluation import (
+    ANSWER_GENERATION_PROMPT,
+    ANSWER_EVALUATION_PROMPT,
+)
 
 
 class EvaluationRunner:
@@ -31,7 +36,7 @@ class EvaluationRunner:
     def __init__(
         self,
         rag_client: "RAG",
-        llm_client: "BaseChatModel" = None,
+        llm_client: Optional["BaseChatModel"] = None,
         config: Optional[EvaluationConfig] = None,
     ):
         """
@@ -49,7 +54,7 @@ class EvaluationRunner:
     
     def run_all(self, ground_truth: Optional[GroundTruth] = None) -> EvaluationReport:
         """
-        运行完整评估（L1 + L2）
+        运行完整评估（L1 + L2 + L3）
         
         Args:
             ground_truth: Ground Truth，如果不提供则从文件加载
@@ -70,7 +75,14 @@ class EvaluationRunner:
         # 3. 运行 L2 评估
         l2_result = self.run_l2_chunk_retrieval(qa_pairs)
         
-        # 4. 构建报告
+        # 4. 运行 L3 评估（需要 LLM）
+        if self.llm:
+            l3_result = self.run_l3_end_to_end(qa_pairs)
+        else:
+            logger.warning("No LLM client provided, skipping L3 evaluation")
+            l3_result = L3Result()
+        
+        # 5. 构建报告
         report = EvaluationReport(
             run_id=str(uuid.uuid4())[:8],
             run_at=datetime.now().isoformat(),
@@ -79,7 +91,7 @@ class EvaluationRunner:
             embedding_model=getattr(self.rag, 'embedding_model', 'unknown'),
             l1_paper_discovery=l1_result,
             l2_section_retrieval=l2_result,
-            l3_end_to_end=L3Result(),  # 暂时空着
+            l3_end_to_end=l3_result,
         )
         
         return report
@@ -241,6 +253,159 @@ class EvaluationRunner:
                    f"R={result.overall_recall:.3f}")
         
         return result
+    
+    def run_l3_end_to_end(self, qa_pairs: list[QAPair]) -> L3Result:
+        """
+        L3: End-to-End QA 评估
+        
+        测试完整的 RAG 流程：检索 + 生成 + 质量评判
+        """
+        if not self.llm:
+            logger.warning("No LLM client, cannot run L3 evaluation")
+            return L3Result()
+        
+        logger.info(f"L3 evaluation with {len(qa_pairs)} QA pairs")
+        
+        # 按难度分类收集结果
+        easy_scores = []
+        medium_scores = []
+        hard_scores = []
+        all_correctness = []
+        all_faithfulness = []
+        all_relevance = []
+        
+        for qa in qa_pairs:
+            # 1. 检索相关内容
+            context = self._retrieve_context(qa)
+            
+            if not context:
+                logger.warning(f"No context retrieved for QA {qa.id}")
+                continue
+            
+            # 2. 生成答案
+            generated_answer = self._generate_answer(qa.question, context)
+            
+            # 3. 评判答案质量
+            scores = self._evaluate_answer(
+                question=qa.question,
+                generated_answer=generated_answer,
+                reference_answer=qa.reference_answer,
+                context=context
+            )
+            
+            # 4. 收集结果
+            correctness = scores.get("correctness", 0) / 5.0  # 归一化到 0-1
+            faithfulness = scores.get("faithfulness", 0) / 5.0
+            relevance = scores.get("relevance", 0) / 5.0
+            
+            all_correctness.append(correctness)
+            all_faithfulness.append(faithfulness)
+            all_relevance.append(relevance)
+            
+            # 按难度分类
+            if qa.difficulty == Difficulty.EASY:
+                easy_scores.append(correctness)
+            elif qa.difficulty == Difficulty.MEDIUM:
+                medium_scores.append(correctness)
+            elif qa.difficulty == Difficulty.HARD:
+                hard_scores.append(correctness)
+            
+            logger.debug(f"QA {qa.id}: correctness={correctness:.2f}, "
+                        f"faithfulness={faithfulness:.2f}, relevance={relevance:.2f}")
+        
+        # 计算平均值
+        result = L3Result(
+            easy_accuracy=sum(easy_scores) / len(easy_scores) if easy_scores else 0,
+            medium_accuracy=sum(medium_scores) / len(medium_scores) if medium_scores else 0,
+            hard_accuracy=sum(hard_scores) / len(hard_scores) if hard_scores else 0,
+            overall_accuracy=sum(all_correctness) / len(all_correctness) if all_correctness else 0,
+            answer_relevance=sum(all_relevance) / len(all_relevance) if all_relevance else 0,
+            faithfulness=sum(all_faithfulness) / len(all_faithfulness) if all_faithfulness else 0,
+        )
+        
+        logger.info(f"L3 results: accuracy={result.overall_accuracy:.3f}, "
+                   f"faithfulness={result.faithfulness:.3f}")
+        
+        return result
+    
+    def _retrieve_context(self, qa: QAPair) -> str:
+        """检索相关内容"""
+        # 使用 search_abstracts 进行检索
+        results = self.rag.search_abstracts(query=qa.question, k=5)
+        
+        if not results:
+            return ""
+        
+        # 构建 context
+        context_parts = []
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "Unknown")
+            text = r.get("text", "")
+            context_parts.append(f"[Paper {i}] {title}\n{text}")
+        
+        return "\n\n".join(context_parts)
+    
+    def _generate_answer(self, question: str, context: str) -> str:
+        """使用 LLM 生成答案"""
+        prompt = ANSWER_GENERATION_PROMPT.format(
+            question=question,
+            context=context
+        )
+        
+        try:
+            response = self.llm.invoke(prompt)
+            return response.content.strip()
+        except Exception as e:
+            logger.error(f"Error generating answer: {e}")
+            return ""
+    
+    def _evaluate_answer(
+        self,
+        question: str,
+        generated_answer: str,
+        reference_answer: str,
+        context: str
+    ) -> dict:
+        """使用 LLM 评判答案质量"""
+        prompt = ANSWER_EVALUATION_PROMPT.format(
+            question=question,
+            generated_answer=generated_answer,
+            reference_answer=reference_answer,
+            context=context
+        )
+        
+        try:
+            response = self.llm.invoke(prompt)
+            content = response.content.strip()
+            
+            # 解析 JSON 响应
+            scores = self._parse_evaluation_response(content)
+            return scores
+            
+        except Exception as e:
+            logger.error(f"Error evaluating answer: {e}")
+            return {"correctness": 0, "faithfulness": 0, "relevance": 0}
+    
+    def _parse_evaluation_response(self, content: str) -> dict:
+        """解析 LLM 评判响应"""
+        # 尝试提取 JSON
+        try:
+            # 查找 JSON 块
+            json_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            pass
+        
+        # 如果解析失败，尝试从文本中提取分数
+        scores = {"correctness": 0, "faithfulness": 0, "relevance": 0}
+        
+        for key in scores.keys():
+            match = re.search(rf'{key}["\s:]+(\d+)', content, re.IGNORECASE)
+            if match:
+                scores[key] = min(int(match.group(1)), 5)
+        
+        return scores
     
     def _source_to_category(self, source: AnswerSource) -> Optional[int]:
         """将 AnswerSource 映射到 section_category"""
