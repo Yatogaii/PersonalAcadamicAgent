@@ -299,3 +299,100 @@ class DataPreparationPipeline:
                 "index_type": stats.index_type,
             }
         return None
+
+    def rebuild_from_chunks(
+        self,
+        strategy: ChunkStrategy = ChunkStrategy.PARAGRAPH,
+        drop_existing: bool = True,
+    ) -> int:
+        """
+        从已保存的 chunks 文件重建评估 collection
+        
+        当 chunks 文件已存在但 collection 数据不一致时使用
+        
+        Args:
+            strategy: 分块策略
+            drop_existing: 是否删除已有 collection
+            
+        Returns:
+            成功插入的 chunks 数量
+        """
+        from rag.milvus import MilvusProvider
+        
+        chunks_dir = self.config.chunks_dir / strategy.value
+        
+        if not chunks_dir.exists():
+            logger.error(f"Chunks directory not found: {chunks_dir}")
+            return 0
+        
+        chunk_files = list(chunks_dir.glob("*.json"))
+        if not chunk_files:
+            logger.error(f"No chunk files found in {chunks_dir}")
+            return 0
+        
+        logger.info(f"Rebuilding collection from {len(chunk_files)} chunk files...")
+        
+        # 1. 创建/重建 collection
+        self.collection_builder.create_collection(strategy, drop_if_exists=drop_existing)
+        
+        total_chunks = 0
+        
+        # 2. 切换到评估 collection
+        with self.collection_builder.use_chunk_strategy(strategy):
+            eval_rag_client = MilvusProvider()
+            
+            for chunk_file in chunk_files:
+                with open(chunk_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                doc_id = data["doc_id"]
+                title = data["title"]
+                chunks = data["chunks"]
+                
+                # 加载 source paper 信息（从文件或数据库）
+                paper_info = self._get_paper_info(doc_id)
+                
+                # 插入 paper-level 记录
+                eval_rag_client.client.insert(
+                    collection_name=eval_rag_client.collection,
+                    data={
+                        eval_rag_client.doc_id_field: doc_id,
+                        eval_rag_client.vector_field: eval_rag_client.embedding_client.embed_query(
+                            f"Title: {title}\nAbstract: {paper_info.get('abstract', '')[:500]}"
+                        ),
+                        eval_rag_client.title_field: title,
+                        eval_rag_client.text_field: paper_info.get("abstract", ""),
+                        eval_rag_client.url_field: paper_info.get("url", ""),
+                        eval_rag_client.pdf_url_field: paper_info.get("pdf_url", ""),
+                        eval_rag_client.conference_name_field: paper_info.get("conference_name", ""),
+                        eval_rag_client.conference_year_field: paper_info.get("conference_year", 0),
+                        eval_rag_client.conference_round_field: paper_info.get("conference_round", ""),
+                        eval_rag_client.chunk_id_field: -1,
+                        eval_rag_client.section_category_field: 0,
+                        eval_rag_client.parent_section_field: "",
+                        eval_rag_client.page_number_field: 1,
+                    }
+                )
+                
+                # 插入 chunks
+                eval_rag_client.insert_paper_chunks(doc_id, chunks, title)
+                total_chunks += len(chunks)
+                
+                logger.info(f"Inserted {len(chunks)} chunks for {doc_id[:8]}...")
+        
+        logger.info(f"Rebuild complete: {total_chunks} chunks from {len(chunk_files)} papers")
+        return total_chunks
+    
+    def _get_paper_info(self, doc_id: str) -> dict:
+        """获取论文信息（从 source_papers.jsonl 或数据库）"""
+        # 先尝试从文件加载
+        if self.config.source_file.exists():
+            with open(self.config.source_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    data = json.loads(line)
+                    if data["doc_id"] == doc_id:
+                        return data
+        
+        # 回退到数据库查询
+        metadata = self.source_rag_client.get_paper_metadata(doc_id)
+        return metadata or {}
