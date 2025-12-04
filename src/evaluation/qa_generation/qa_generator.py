@@ -1,12 +1,18 @@
 """
-QA Generator
+QA Generator (V2)
 
 负责从 chunks 文件生成测试用的 QA pairs
 
+改进版支持 4 个难度级别:
+- Level 1 (Easy): 单论文精确题 - 关键词匹配
+- Level 2 (Medium): 单论文推理题 - 需要理解方法论
+- Level 3 (Hard): 跨论文比较题 - 比较相关论文
+- Level 4 (Expert): 领域综述题 - 综合多篇论文
+
 流程:
-1. 读取 data_preparation 保存的 chunks 文件
-2. 按论文/section 分组
-3. 使用 LLM 生成不同难度的问题
+1. 读取 chunks 文件
+2. 对论文进行聚类（用于跨论文问题）
+3. 分层次生成不同难度的问题
 4. 保存 Ground Truth
 """
 
@@ -26,6 +32,15 @@ from evaluation.schemas import (
     QAPair, GroundTruth, Difficulty, AnswerSource
 )
 from evaluation.config import EvaluationConfig, ChunkStrategy
+from evaluation.qa_generation.prompts_v2 import (
+    LEVEL1_EASY_PROMPT, LEVEL2_MEDIUM_PROMPT, 
+    LEVEL3_COMPARISON_PROMPT, LEVEL4_SURVEY_PROMPT,
+    format_for_level1, format_for_level2, 
+    format_cluster_for_level3, format_for_level4
+)
+from evaluation.qa_generation.paper_clustering import PaperClusterer, PaperCluster
+
+# 兼容旧版 import
 from evaluation.qa_generation.prompts import (
     EASY_QA_PROMPT, MEDIUM_QA_PROMPT, HARD_QA_PROMPT,
     format_chunks_for_easy, format_chunks_for_medium, format_chunks_for_hard
@@ -108,24 +123,36 @@ class QAGenerator:
         self,
         strategy: ChunkStrategy = ChunkStrategy.PARAGRAPH,
         num_questions: int = 50,
-        difficulty_distribution: Optional[dict] = None
+        difficulty_distribution: Optional[dict] = None,
+        use_clustering: bool = True
     ) -> GroundTruth:
         """
-        生成 QA pairs
+        生成 QA pairs (V2)
         
         Args:
             strategy: 分块策略（决定读取哪个目录的 chunks）
             num_questions: 生成的问题总数
-            difficulty_distribution: 难度分布 {"easy": 0.4, "medium": 0.4, "hard": 0.2}
+            difficulty_distribution: 难度分布
+                - 默认: {"easy": 0.2, "medium": 0.3, "hard": 0.3, "expert": 0.2}
+                - 旧版兼容: {"easy": 0.4, "medium": 0.4, "hard": 0.2}
+            use_clustering: 是否使用论文聚类生成跨论文问题
             
         Returns:
             GroundTruth 对象
         """
-        difficulty_distribution = difficulty_distribution or {
-            "easy": 0.4,
-            "medium": 0.4,
-            "hard": 0.2
+        # 新的默认分布，强调跨论文问题
+        default_distribution = {
+            "easy": 0.2,      # Level 1: 单论文精确题
+            "medium": 0.3,    # Level 2: 单论文推理题  
+            "hard": 0.3,      # Level 3: 跨论文比较题
+            "expert": 0.2     # Level 4: 领域综述题
         }
+        
+        difficulty_distribution = difficulty_distribution or default_distribution
+        
+        # 兼容旧版（没有 expert）
+        if "expert" not in difficulty_distribution:
+            difficulty_distribution["expert"] = 0
         
         # 加载 chunks
         all_chunks = self.load_chunks(strategy)
@@ -134,57 +161,72 @@ class QAGenerator:
             raise ValueError(f"Need at least 3 papers, got {len(all_chunks)}")
         
         # 计算各难度的问题数量
-        easy_count = int(num_questions * difficulty_distribution.get("easy", 0.4))
-        medium_count = int(num_questions * difficulty_distribution.get("medium", 0.4))
-        hard_count = num_questions - easy_count - medium_count
+        easy_count = int(num_questions * difficulty_distribution.get("easy", 0.2))
+        medium_count = int(num_questions * difficulty_distribution.get("medium", 0.3))
+        hard_count = int(num_questions * difficulty_distribution.get("hard", 0.3))
+        expert_count = num_questions - easy_count - medium_count - hard_count
         
-        logger.info(f"Generating {num_questions} questions: "
-                   f"easy={easy_count}, medium={medium_count}, hard={hard_count}")
+        logger.info(f"Generating {num_questions} questions:")
+        logger.info(f"  Level 1 (Easy): {easy_count}")
+        logger.info(f"  Level 2 (Medium): {medium_count}")
+        logger.info(f"  Level 3 (Hard/Comparison): {hard_count}")
+        logger.info(f"  Level 4 (Expert/Survey): {expert_count}")
+        
+        # 论文聚类（用于 Level 3 和 Level 4）
+        clusters = []
+        if use_clustering and (hard_count > 0 or expert_count > 0):
+            logger.info("Clustering papers using LLM for cross-paper questions...")
+            clusterer = PaperClusterer(llm_client=self.llm)
+            # 优先使用 LLM 聚类，更准确
+            clusters = clusterer.cluster_by_llm(all_chunks, min_cluster_size=2)
+            # 如果 LLM 聚类失败，会自动 fallback 到关键词聚类
         
         qa_pairs: list[QAPair] = []
         qa_id = 1
-        
-        # 最大重试次数
         max_retries = 3
         
-        # 生成 Easy 问题（带重试）
+        # Level 1: Easy - 单论文精确题
         if easy_count > 0:
-            easy_pairs = []
-            for attempt in range(max_retries):
-                easy_pairs = self.generate_easy_questions(all_chunks, easy_count, start_id=qa_id)
-                if len(easy_pairs) >= easy_count * 0.5:  # 至少生成 50% 的问题
-                    break
-                logger.warning(f"Easy questions attempt {attempt + 1}/{max_retries}: got {len(easy_pairs)}/{easy_count}")
+            logger.info("Generating Level 1 (Easy) questions...")
+            easy_pairs = self._generate_with_retry(
+                lambda: self.generate_level1_easy(all_chunks, easy_count, start_id=qa_id),
+                easy_count, max_retries, "Level 1"
+            )
             qa_pairs.extend(easy_pairs)
             qa_id += len(easy_pairs)
-            logger.info(f"Generated {len(easy_pairs)} easy questions")
         
-        # 生成 Medium 问题（带重试）
+        # Level 2: Medium - 单论文推理题
         if medium_count > 0:
-            medium_pairs = []
-            for attempt in range(max_retries):
-                medium_pairs = self.generate_medium_questions(all_chunks, medium_count, start_id=qa_id)
-                if len(medium_pairs) >= medium_count * 0.5:
-                    break
-                logger.warning(f"Medium questions attempt {attempt + 1}/{max_retries}: got {len(medium_pairs)}/{medium_count}")
+            logger.info("Generating Level 2 (Medium) questions...")
+            medium_pairs = self._generate_with_retry(
+                lambda: self.generate_level2_medium(all_chunks, medium_count, start_id=qa_id),
+                medium_count, max_retries, "Level 2"
+            )
             qa_pairs.extend(medium_pairs)
             qa_id += len(medium_pairs)
-            logger.info(f"Generated {len(medium_pairs)} medium questions")
         
-        # 生成 Hard 问题（带重试）
+        # Level 3: Hard - 跨论文比较题
         if hard_count > 0:
-            hard_pairs = []
-            for attempt in range(max_retries):
-                hard_pairs = self.generate_hard_questions(all_chunks, hard_count, start_id=qa_id)
-                if len(hard_pairs) >= hard_count * 0.5:
-                    break
-                logger.warning(f"Hard questions attempt {attempt + 1}/{max_retries}: got {len(hard_pairs)}/{hard_count}")
+            logger.info("Generating Level 3 (Hard/Comparison) questions...")
+            hard_pairs = self._generate_with_retry(
+                lambda: self.generate_level3_comparison(all_chunks, clusters, hard_count, start_id=qa_id),
+                hard_count, max_retries, "Level 3"
+            )
             qa_pairs.extend(hard_pairs)
-            logger.info(f"Generated {len(hard_pairs)} hard questions")
+            qa_id += len(hard_pairs)
+        
+        # Level 4: Expert - 领域综述题
+        if expert_count > 0:
+            logger.info("Generating Level 4 (Expert/Survey) questions...")
+            expert_pairs = self._generate_with_retry(
+                lambda: self.generate_level4_survey(all_chunks, clusters, expert_count, start_id=qa_id),
+                expert_count, max_retries, "Level 4"
+            )
+            qa_pairs.extend(expert_pairs)
         
         # 构建 GroundTruth
         ground_truth = GroundTruth(
-            version="1.0",
+            version="2.0",  # 新版本
             created_at=datetime.now().isoformat(),
             total_papers=len(all_chunks),
             qa_pairs=qa_pairs,
@@ -196,7 +238,172 @@ class QAGenerator:
             source_distribution=self._count_source_distribution(qa_pairs),
         )
         
+        logger.info(f"Total generated: {len(qa_pairs)} questions")
         return ground_truth
+    
+    def _generate_with_retry(
+        self, 
+        gen_func, 
+        target_count: int, 
+        max_retries: int,
+        level_name: str
+    ) -> list[QAPair]:
+        """带重试的问题生成"""
+        for attempt in range(max_retries):
+            pairs = gen_func()
+            if len(pairs) >= target_count * 0.5:
+                logger.info(f"  {level_name}: Generated {len(pairs)}/{target_count}")
+                return pairs
+            logger.warning(f"  {level_name} attempt {attempt + 1}/{max_retries}: got {len(pairs)}/{target_count}")
+        return pairs
+    
+    # ==================== Level 1: Easy ====================
+    
+    def generate_level1_easy(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        count: int,
+        start_id: int = 1
+    ) -> list[QAPair]:
+        """
+        Level 1: 单论文精确题
+        
+        特点: 
+        - 问题包含论文关键词
+        - 答案直接来自 abstract
+        - 单论文检索即可回答
+        """
+        paper_summaries = format_for_level1(all_chunks, max_papers=30)
+        
+        prompt = LEVEL1_EASY_PROMPT.format(
+            paper_summaries=paper_summaries,
+            count=count
+        )
+        
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        return self._parse_qa_response(content, Difficulty.EASY, start_id)[:count]
+    
+    # ==================== Level 2: Medium ====================
+    
+    def generate_level2_medium(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        count: int,
+        start_id: int = 1
+    ) -> list[QAPair]:
+        """
+        Level 2: 单论文推理题
+        
+        特点:
+        - 需要理解论文方法论
+        - 答案来自 method/evaluation section
+        - 问题不包含明显关键词
+        """
+        paper_summaries = format_for_level2(all_chunks, max_papers=15)
+        
+        prompt = LEVEL2_MEDIUM_PROMPT.format(
+            paper_summaries=paper_summaries,
+            count=count
+        )
+        
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        return self._parse_qa_response(content, Difficulty.MEDIUM, start_id)[:count]
+    
+    # ==================== Level 3: Hard (Comparison) ====================
+    
+    def generate_level3_comparison(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        clusters: list[PaperCluster],
+        count: int,
+        start_id: int = 1
+    ) -> list[QAPair]:
+        """
+        Level 3: 跨论文比较题
+        
+        特点:
+        - 比较同一聚类内的相关论文
+        - 需要理解多篇论文的方法差异
+        - 问题不提及具体论文名
+        """
+        qa_pairs = []
+        
+        if not clusters:
+            # 没有聚类，回退到旧方法
+            logger.warning("No clusters available, falling back to old method")
+            return self.generate_hard_questions(all_chunks, count, start_id)
+        
+        # 每个聚类生成一些比较题
+        questions_per_cluster = max(1, count // len(clusters))
+        
+        for cluster in clusters:
+            if len(qa_pairs) >= count:
+                break
+            
+            cluster_papers = format_cluster_for_level3(cluster, all_chunks)
+            
+            prompt = LEVEL3_COMPARISON_PROMPT.format(
+                cluster_theme=cluster.theme,
+                cluster_papers=cluster_papers,
+                count=questions_per_cluster
+            )
+            
+            response = self.llm.invoke(prompt)
+            content = response.content if hasattr(response, 'content') else str(response)
+            
+            pairs = self._parse_qa_response(
+                content, Difficulty.HARD, start_id + len(qa_pairs)
+            )
+            
+            # 标记为多论文问题
+            for p in pairs:
+                p.is_multi_paper = True
+            
+            qa_pairs.extend(pairs[:questions_per_cluster])
+        
+        return qa_pairs[:count]
+    
+    # ==================== Level 4: Expert (Survey) ====================
+    
+    def generate_level4_survey(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        clusters: list[PaperCluster],
+        count: int,
+        start_id: int = 1
+    ) -> list[QAPair]:
+        """
+        Level 4: 领域综述题
+        
+        特点:
+        - 需要综合 3+ 篇论文的信息
+        - 问关于研究趋势、方法论模式、共同挑战
+        - 答案需要高度综合
+        """
+        area_overview, paper_list = format_for_level4(all_chunks, clusters)
+        
+        prompt = LEVEL4_SURVEY_PROMPT.format(
+            area_overview=area_overview,
+            paper_list=paper_list,
+            count=count
+        )
+        
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        pairs = self._parse_qa_response(content, Difficulty.HARD, start_id)
+        
+        # 标记为多论文问题
+        for p in pairs:
+            p.is_multi_paper = True
+        
+        return pairs[:count]
+    
+    # ==================== 兼容旧版方法 ====================
     
     def generate_easy_questions(
         self,
@@ -204,26 +411,8 @@ class QAGenerator:
         count: int,
         start_id: int = 1
     ) -> list[QAPair]:
-        """
-        生成 Easy 级别问题
-        
-        特点: 关键词直接匹配，单论文检索
-        """
-        # 准备输入
-        paper_summaries = format_chunks_for_easy(all_chunks, max_papers=30)
-        
-        prompt = EASY_QA_PROMPT.format(
-            paper_summaries=paper_summaries,
-            count=count
-        )
-        
-        # 调用 LLM
-        response = self.llm.invoke(prompt)
-        content = response.content if hasattr(response, 'content') else str(response)
-        
-        # 解析 JSON
-        qa_pairs = self._parse_qa_response(content, Difficulty.EASY, start_id)
-        return qa_pairs[:count]
+        """兼容旧版"""
+        return self.generate_level1_easy(all_chunks, count, start_id)
     
     def generate_medium_questions(
         self,
@@ -231,24 +420,8 @@ class QAGenerator:
         count: int,
         start_id: int = 1
     ) -> list[QAPair]:
-        """
-        生成 Medium 级别问题
-        
-        特点: 需要语义理解，可能需要 section-level 检索
-        """
-        # 准备输入（包含 method/eval section）
-        paper_summaries = format_chunks_for_medium(all_chunks, max_papers=20)
-        
-        prompt = MEDIUM_QA_PROMPT.format(
-            paper_summaries=paper_summaries,
-            count=count
-        )
-        
-        response = self.llm.invoke(prompt)
-        content = response.content if hasattr(response, 'content') else str(response)
-        
-        qa_pairs = self._parse_qa_response(content, Difficulty.MEDIUM, start_id)
-        return qa_pairs[:count]
+        """兼容旧版"""
+        return self.generate_level2_medium(all_chunks, count, start_id)
     
     def generate_hard_questions(
         self,
@@ -256,12 +429,7 @@ class QAGenerator:
         count: int,
         start_id: int = 1
     ) -> list[QAPair]:
-        """
-        生成 Hard 级别问题
-        
-        特点: 跨论文综合，需要多步检索
-        """
-        # 准备输入
+        """兼容旧版 - 回退到简单的跨论文问题"""
         paper_summaries = format_chunks_for_hard(all_chunks, max_papers=30)
         
         prompt = HARD_QA_PROMPT.format(
@@ -274,11 +442,12 @@ class QAGenerator:
         
         qa_pairs = self._parse_qa_response(content, Difficulty.HARD, start_id)
         
-        # Hard 问题标记为 multi-paper
         for q in qa_pairs:
             q.is_multi_paper = True
         
         return qa_pairs[:count]
+    
+    # ==================== JSON 解析 ====================
     
     def _parse_qa_response(
         self, 

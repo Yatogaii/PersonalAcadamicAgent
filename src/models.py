@@ -14,7 +14,8 @@ def init_chat_model_from_modelscope(model_name="deepseek-ai/DeepSeek-V3.2-Exp") 
     '''
     model = init_chat_model(model=model_name,
                              model_provider="openai",
-                             base_url="https://api-inference.modelscope.cn/v1")
+                             base_url="https://api-inference.modelscope.cn/v1",
+                             api_key=settings.OPENAI_API_KEY)
     return model
 
 def init_kimi_k2() -> BaseChatModel:
@@ -28,4 +29,11 @@ def init_ollama_model(model_name="qwen3:8b"):
     model = init_chat_model(model=model_name,
                              model_provider="ollama",
                              base_url=settings.OLLAMA_API_URL)
+    return model
+
+def init_chat_model_from_gptapi(model_name="gpt-4"):
+    model = init_chat_model(model=model_name,
+                             model_provider="openai",
+                             base_url="https://api.gptapi.us/v1/chat/completions",
+                             api_key=settings.OPENAI_API_KEY)
     return model

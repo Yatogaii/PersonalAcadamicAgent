@@ -48,7 +48,7 @@ def step1_export_and_prepare(
         all_strategies: 是否准备所有 chunk 策略 (paragraph + contextual)
     """
     from rag.milvus import MilvusProvider
-    from models import init_ollama_model
+    from models import init_chat_model_from_modelscope
     from evaluation.config import EvaluationConfig, ChunkStrategy
     from evaluation.data_preparation.pipeline import DataPreparationPipeline
     
@@ -59,7 +59,7 @@ def step1_export_and_prepare(
     # 初始化
     config = EvaluationConfig()
     source_rag = MilvusProvider()
-    llm = init_ollama_model("qwen3:8b")
+    llm = init_chat_model_from_modelscope()
     
     print(f"源 Collection: {source_rag.collection}")
     print(f"评估数据目录: {config.data_dir}")
@@ -98,7 +98,7 @@ def step2_generate_qa(num_questions: int = 50):
     """
     Step 2: 从 chunks 生成 QA pairs
     """
-    from models import init_ollama_model
+    from models import init_chat_model_from_modelscope
     from evaluation.config import EvaluationConfig, ChunkStrategy
     from evaluation.qa_generation.qa_generator import QAGenerator
     
@@ -107,7 +107,7 @@ def step2_generate_qa(num_questions: int = 50):
     print("=" * 70)
     
     config = EvaluationConfig()
-    llm = init_ollama_model("qwen3:8b")
+    llm = init_chat_model_from_modelscope()
     
     generator = QAGenerator(llm_client=llm, config=config)
     
@@ -120,14 +120,15 @@ def step2_generate_qa(num_questions: int = 50):
     print(f"Chunks 目录: {chunks_dir}")
     print(f"生成 {num_questions} 个问题...")
     
-    # 生成 QA
+    # 生成 QA（使用新的 4 级难度分布）
     ground_truth = generator.generate(
         strategy=ChunkStrategy.PARAGRAPH,
         num_questions=num_questions,
         difficulty_distribution={
-            "easy": 0.4,
-            "medium": 0.4,
-            "hard": 0.2
+            "easy": 0.2,      # Level 1: 单论文精确题
+            "medium": 0.3,    # Level 2: 单论文推理题
+            "hard": 0.3,      # Level 3: 跨论文比较题
+            "expert": 0.2     # Level 4: 领域综述题
         }
     )
     
@@ -136,9 +137,9 @@ def step2_generate_qa(num_questions: int = 50):
     
     print(f"\n✓ 生成 {len(ground_truth.qa_pairs)} 个问题")
     print(f"✓ 保存到: {save_path}")
-    print(f"  - Easy: {ground_truth.difficulty_distribution.get('easy', 0)}")
-    print(f"  - Medium: {ground_truth.difficulty_distribution.get('medium', 0)}")
-    print(f"  - Hard: {ground_truth.difficulty_distribution.get('hard', 0)}")
+    print(f"  - Level 1 (Easy): {ground_truth.difficulty_distribution.get('easy', 0)}")
+    print(f"  - Level 2 (Medium): {ground_truth.difficulty_distribution.get('medium', 0)}")
+    print(f"  - Level 3 (Hard): {ground_truth.difficulty_distribution.get('hard', 0)}")
     
     return ground_truth
 
@@ -147,7 +148,7 @@ def step3_run_evaluation(run_l3: bool = True):
     """
     Step 3: 运行评估
     """
-    from models import init_ollama_model
+    from models import init_chat_model_from_modelscope
     from rag.milvus import MilvusProvider
     from evaluation.config import EvaluationConfig, ChunkStrategy
     from evaluation.runner import EvaluationRunner
@@ -165,7 +166,7 @@ def step3_run_evaluation(run_l3: bool = True):
         return None
     
     builder = CollectionBuilder(config)
-    llm = init_ollama_model("qwen3:8b") if run_l3 else None
+    llm = init_chat_model_from_modelscope() if run_l3 else None
     
     print(f"Ground Truth: {config.ground_truth_file}")
     print(f"评估 Collection: papers_eval_paragraph")
@@ -321,7 +322,7 @@ def run_comparison(
         resume: 是否从缓存恢复（跳过已完成的实验）
         clear_cache: 清除缓存后重新运行
     """
-    from models import init_ollama_model
+    from models import init_chat_model_from_modelscope
     from evaluation.config import EvaluationConfig
     from evaluation.comparison_runner import ComparisonRunner
     
@@ -343,7 +344,7 @@ def run_comparison(
     print("=" * 70)
     
     # 初始化 LLM
-    llm = init_ollama_model("qwen3:8b")
+    llm = init_chat_model_from_modelscope()
     
     # 创建对比运行器
     runner = ComparisonRunner(llm_client=llm, config=config)

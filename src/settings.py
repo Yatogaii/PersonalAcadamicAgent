@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     KIMI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     GOOGLE_API_KEY: str = ""
+    GPT_API_KEY: str = ""
     HF_TOKEN: str = ""
 
     # --- Proxies ---
