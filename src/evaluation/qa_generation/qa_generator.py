@@ -144,23 +144,41 @@ class QAGenerator:
         qa_pairs: list[QAPair] = []
         qa_id = 1
         
-        # 生成 Easy 问题
+        # 最大重试次数
+        max_retries = 3
+        
+        # 生成 Easy 问题（带重试）
         if easy_count > 0:
-            easy_pairs = self.generate_easy_questions(all_chunks, easy_count, start_id=qa_id)
+            easy_pairs = []
+            for attempt in range(max_retries):
+                easy_pairs = self.generate_easy_questions(all_chunks, easy_count, start_id=qa_id)
+                if len(easy_pairs) >= easy_count * 0.5:  # 至少生成 50% 的问题
+                    break
+                logger.warning(f"Easy questions attempt {attempt + 1}/{max_retries}: got {len(easy_pairs)}/{easy_count}")
             qa_pairs.extend(easy_pairs)
             qa_id += len(easy_pairs)
             logger.info(f"Generated {len(easy_pairs)} easy questions")
         
-        # 生成 Medium 问题
+        # 生成 Medium 问题（带重试）
         if medium_count > 0:
-            medium_pairs = self.generate_medium_questions(all_chunks, medium_count, start_id=qa_id)
+            medium_pairs = []
+            for attempt in range(max_retries):
+                medium_pairs = self.generate_medium_questions(all_chunks, medium_count, start_id=qa_id)
+                if len(medium_pairs) >= medium_count * 0.5:
+                    break
+                logger.warning(f"Medium questions attempt {attempt + 1}/{max_retries}: got {len(medium_pairs)}/{medium_count}")
             qa_pairs.extend(medium_pairs)
             qa_id += len(medium_pairs)
             logger.info(f"Generated {len(medium_pairs)} medium questions")
         
-        # 生成 Hard 问题
+        # 生成 Hard 问题（带重试）
         if hard_count > 0:
-            hard_pairs = self.generate_hard_questions(all_chunks, hard_count, start_id=qa_id)
+            hard_pairs = []
+            for attempt in range(max_retries):
+                hard_pairs = self.generate_hard_questions(all_chunks, hard_count, start_id=qa_id)
+                if len(hard_pairs) >= hard_count * 0.5:
+                    break
+                logger.warning(f"Hard questions attempt {attempt + 1}/{max_retries}: got {len(hard_pairs)}/{hard_count}")
             qa_pairs.extend(hard_pairs)
             logger.info(f"Generated {len(hard_pairs)} hard questions")
         
@@ -269,19 +287,38 @@ class QAGenerator:
         start_id: int
     ) -> list[QAPair]:
         """解析 LLM 返回的 JSON"""
-        # 尝试提取 JSON 数组
         import re
+        
+        # 尝试提取 JSON 数组
         json_match = re.search(r'\[[\s\S]*\]', content)
         
         if not json_match:
             logger.warning(f"No JSON array found in response for {difficulty.value}")
+            logger.debug(f"Response content: {content[:500]}...")
             return []
         
+        json_str = json_match.group()
+        
+        # 尝试修复常见的 JSON 错误
         try:
-            data = json.loads(json_match.group())
+            data = json.loads(json_str)
         except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error: {e}")
-            return []
+            logger.warning(f"JSON parse error: {e}, attempting to fix...")
+            
+            # 尝试修复: 移除尾部逗号
+            fixed_json = re.sub(r',\s*}', '}', json_str)
+            fixed_json = re.sub(r',\s*\]', ']', fixed_json)
+            
+            # 尝试修复: 替换单引号为双引号
+            fixed_json = fixed_json.replace("'", '"')
+            
+            try:
+                data = json.loads(fixed_json)
+                logger.info("JSON fixed successfully")
+            except json.JSONDecodeError as e2:
+                logger.error(f"JSON fix failed: {e2}")
+                logger.debug(f"Problematic JSON: {json_str[:1000]}...")
+                return []
         
         qa_pairs = []
         for i, item in enumerate(data):

@@ -1,275 +1,714 @@
-# RAG Evaluation Framework
+# RAG 评估框架文档
 
-## 概述
+## 目录
+1. [快速开始](#快速开始)
+2. [架构概览](#架构概览)
+3. [评估指标详解](#评估指标详解)
+4. [对比实验配置](#对比实验配置)
+5. [数据流程](#数据流程)
+6. [API 参考](#api-参考)
 
-本模块用于评估 RAG 系统的检索和生成质量，支持多种配置对比实验。
+---
 
-## 设计原则
+## 快速开始
 
-1. **复用主逻辑代码**：通过修改 `settings` 切换 collection，复用 `MilvusProvider`、`PDFLoader` 等
-2. **Contextual Chunking 与 Annotation 合并**：在生成 context_prefix 时保存到本地，QA 生成时复用
-3. **支持 Chunk-level 评估**：Ground Truth 可以精确到 chunk 级别
+### 1. 运行评估（使用已有数据）
 
-## 架构
+```bash
+# L1 + L2 评估（快速，约 5 秒）
+uv run python tests/test_evaluation_runner.py
+
+# L1 + L2 + L3 评估（需要 LLM，约 20-30 分钟）
+uv run python tests/test_evaluation_runner.py --full
+
+# 只运行 L1 Paper Discovery
+uv run python tests/test_evaluation_runner.py --l1-only
+
+# 只运行 L3 End-to-End
+uv run python tests/test_evaluation_runner.py --l3-only
+```
+
+### 2. 查看数据状态
+
+```bash
+uv run python scripts/run_full_evaluation.py --status
+```
+
+输出示例：
+```
+📄 Source Papers: 821 篇
+📦 Chunks: 8 篇论文, 1486 个 chunks
+❓ Ground Truth: 5 个 QA pairs
+🗄️ Eval Collection: papers_eval_paragraph (1494 条记录)
+📊 Reports: 3 个报告
+```
+
+### 3. 生成更多测试数据
+
+```bash
+# 从现有 chunks 生成更多 QA（不需要重新处理 PDF）
+uv run python scripts/run_full_evaluation.py --generate-qa --num-questions 30
+
+# 从业务库抽样更多论文（需要下载 PDF）
+uv run python scripts/run_full_evaluation.py --full --sample 20 --num-questions 30
+```
+
+---
+
+## 完整对比实验流程
+
+使用 `--compare` 模式可以一键运行 **12 种配置**的对比实验：
+
+```bash
+uv run python scripts/run_full_evaluation.py --compare --sample 20 --num-questions 30
+```
+
+### 流程概览
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           完整对比实验流程                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Step 1: 数据准备                                                            │
+│  ────────────────                                                            │
+│  • 从业务库 (papers_rag) 抽样论文元数据                                        │
+│  • 下载 PDF 文件到本地                                                        │
+│  • 使用两种策略分别处理 chunks:                                                │
+│      - paragraph: 直接按段落分块                                              │
+│      - contextual: LLM 增强上下文分块                                         │
+│  • 创建 2 个评估 collection:                                                  │
+│      - papers_eval_paragraph                                                 │
+│      - papers_eval_contextual                                                │
+│                                                                              │
+│  Step 2: QA 生成                                                             │
+│  ──────────────                                                              │
+│  • 从 chunks 中用 LLM 生成问答对                                              │
+│  • 每个 QA 包含: 问题、答案、来源论文、来源章节、期望 chunks                      │
+│  • 保存到 ground_truth.json                                                  │
+│                                                                              │
+│  Step 3: 运行 12 种实验                                                       │
+│  ─────────────────────                                                       │
+│  对于每种配置组合:                                                             │
+│                                                                              │
+│    2 Chunk 策略   ×   3 Index 类型   ×   2 RAG 模式   =   12 种配置           │
+│    ─────────────     ─────────────      ───────────                          │
+│    • paragraph       • FLAT (精确)      • basic                              │
+│    • contextual      • HNSW (近似)      • agentic                            │
+│                      • IVF_FLAT                                              │
+│                                                                              │
+│  每种配置执行:                                                                 │
+│    1. 切换到对应的 collection                                                 │
+│    2. 重建对应类型的索引                                                       │
+│    3. 运行 L1 评估 (Paper Discovery)                                          │
+│    4. 运行 L2 评估 (Section Retrieval)                                        │
+│    5. 运行 L3 评估 (End-to-End QA, 可选)                                      │
+│    6. 记录指标                                                                │
+│                                                                              │
+│  Step 4: 生成对比报告                                                         │
+│  ────────────────────                                                        │
+│  • 汇总所有配置的指标                                                          │
+│  • 生成 Markdown 对比表格                                                     │
+│  • 保存 JSON 详细报告                                                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 资源说明
+
+| 资源 | 数量 | 说明 |
+|------|------|------|
+| **Milvus Collections** | 2 个 | `papers_eval_paragraph`, `papers_eval_contextual` |
+| **索引重建** | 6 次 | 每个 collection 重建 3 种索引类型 |
+| **评估运行** | 12 次 | 2 chunk × 3 index × 2 agentic |
+| **LLM 调用** | ~30×12 次 (L3) | 每个 QA 需要 LLM 评判 |
+
+### 快速模式
+
+```bash
+# 跳过 L3 评估（快很多，只比较检索性能）
+uv run python scripts/run_full_evaluation.py --compare --sample 20 --no-l3
+
+# 使用已有数据（跳过 Step 1 和 Step 2）
+uv run python scripts/run_full_evaluation.py --compare --skip-data-prep
+```
+
+---
+
+## 架构概览
+
+### 系统架构图
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Evaluation Framework                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │ Data Preparation │    │  QA Generation  │    │   Runner     │ │
+│  │                  │    │                 │    │              │ │
+│  │ • DataExporter   │───▶│ • QAGenerator   │───▶│ • L1 Eval    │ │
+│  │ • PDFLoader      │    │ • Prompts       │    │ • L2 Eval    │ │
+│  │ • CollectionBuilder│  │                 │    │ • L3 Eval    │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+│           │                      │                     │         │
+│           ▼                      ▼                     ▼         │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │ evaluation/data/ │    │ ground_truth.json│   │ reports/*.json│ │
+│  │ • chunks/        │    │                 │    │              │ │
+│  │ • pdfs/          │    │                 │    │              │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                         RAG Components                           │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
+│  │  MilvusProvider │    │   Embedding     │    │     LLM      │ │
+│  │                 │    │                 │    │              │ │
+│  │ • search_abstracts│  │ • qwen3-embedding│   │ • qwen3:8b   │ │
+│  │ • search_by_section│ │ • dim=2560      │    │              │ │
+│  └─────────────────┘    └─────────────────┘    └──────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 核心模块
+
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| **EvaluationRunner** | `src/evaluation/runner.py` | 执行 L1/L2/L3 评估，生成报告 |
+| **QAGenerator** | `src/evaluation/qa_generation/qa_generator.py` | 从 chunks 生成测试 QA pairs |
+| **DataPreparationPipeline** | `src/evaluation/data_preparation/pipeline.py` | 数据导出、PDF处理、chunk保存 |
+| **CollectionBuilder** | `src/evaluation/data_preparation/collection_builder.py` | 管理评估 collection，支持策略切换 |
+| **EvaluationConfig** | `src/evaluation/config.py` | 配置管理（路径、策略、参数） |
+
+---
+
+## 评估指标详解
+
+### L1: Paper Discovery（论文发现）
+
+测试目标：给定一个问题，能否找到相关的论文？
+
+**使用的 RAG 方法**: `search_abstracts(query, k=10)`
+
+| 指标 | 公式 | 说明 |
+|------|------|------|
+| **Precision@K** | $P@K = \frac{\|Retrieved_K \cap Relevant\|}{K}$ | 返回的 K 个结果中有多少是相关的 |
+| **Recall@K** | $R@K = \frac{\|Retrieved_K \cap Relevant\|}{\|Relevant\|}$ | 相关文档中有多少被返回 |
+| **MRR** | $MRR = \frac{1}{N}\sum_{i=1}^{N}\frac{1}{rank_i}$ | 第一个相关结果的排名倒数的平均值 |
+| **Hit Rate** | $HR = \frac{\|queries\ with\ hit\|}{\|queries\|}$ | 至少返回一个相关结果的查询比例 |
+
+**代码实现**:
+```python
+# src/evaluation/runner.py
+
+def run_l1_paper_discovery(self, qa_pairs: list[QAPair]) -> L1Result:
+    for qa in valid_pairs:
+        # 检索
+        results = self.rag.search_abstracts(query=qa.question, k=10)
+        retrieved_docs = [r["doc_id"] for r in results]
+        expected_docs = set(qa.expected_doc_ids)
+        
+        # 计算指标
+        p_at_5 = len(set(retrieved_docs[:5]) & expected_docs) / 5
+        p_at_10 = len(set(retrieved_docs[:10]) & expected_docs) / 10
+        r_at_k = len(set(retrieved_docs[:k]) & expected_docs) / len(expected_docs)
+        
+        # MRR: 找到第一个相关文档的位置
+        for rank, doc_id in enumerate(retrieved_docs, 1):
+            if doc_id in expected_docs:
+                mrr = 1.0 / rank
+                break
+```
+
+---
+
+### L2: Section Retrieval（章节检索）
+
+测试目标：给定问题和目标论文，能否找到正确的 chunk？
+
+**使用的 RAG 方法**: `search_by_section(query, doc_id, section_category, k=10)`
+
+| 指标 | 公式 | 说明 |
+|------|------|------|
+| **Chunk Precision** | $P = \frac{\|Retrieved \cap Expected\|}{\|Retrieved\|}$ | 返回的 chunks 中有多少是期望的 |
+| **Chunk Recall** | $R = \frac{\|Retrieved \cap Expected\|}{\|Expected\|}$ | 期望的 chunks 中有多少被返回 |
+| **Method Precision** | 同上，限定 `section_category=2` | 方法论章节的检索精度 |
+| **Eval Precision** | 同上，限定 `section_category=4` | 实验章节的检索精度 |
+
+**代码实现**:
+```python
+# src/evaluation/runner.py
+
+def run_l2_chunk_retrieval(self, qa_pairs: list[QAPair]) -> L2Result:
+    for qa in valid_pairs:  # 只用有 expected_chunk_ids 的问题
+        expected_chunks = set(qa.expected_chunk_ids)
+        
+        # 根据 answer_source 确定 section_category
+        section_cat = self._source_to_category(qa.answer_source)
+        
+        # 检索
+        results = self.rag.search_by_section(
+            query=qa.question,
+            doc_id=qa.expected_doc_ids[0],
+            section_category=section_cat,
+            k=10
+        )
+        
+        retrieved_chunks = set(r["chunk_id"] for r in results)
+        
+        precision = len(expected_chunks & retrieved_chunks) / len(retrieved_chunks)
+        recall = len(expected_chunks & retrieved_chunks) / len(expected_chunks)
+```
+
+---
+
+### L3: End-to-End QA（端到端问答）
+
+测试目标：完整的 RAG 流程能否生成正确的答案？
+
+**流程**: 检索 → LLM 生成答案 → LLM 评判质量
+
+| 指标 | 范围 | 说明 |
+|------|------|------|
+| **Correctness** | 0-1 | 答案是否正确（与参考答案对比） |
+| **Faithfulness** | 0-1 | 答案是否忠实于检索内容（无幻觉） |
+| **Relevance** | 0-1 | 答案是否直接回答问题 |
+| **Easy/Medium/Hard Accuracy** | 0-1 | 按难度分类的正确率 |
+
+**LLM-as-Judge 评分**:
+```python
+# src/evaluation/prompts/l3_evaluation.py
+
+ANSWER_EVALUATION_PROMPT = """
+评分标准：
+1. Correctness (0-5): 答案是否包含正确信息？
+2. Faithfulness (0-5): 答案是否基于检索内容？
+3. Relevance (0-5): 答案是否直接回答问题？
+
+输出 JSON: {"correctness": 4, "faithfulness": 5, "relevance": 4}
+"""
+```
+
+**代码实现**:
+```python
+# src/evaluation/runner.py
+
+def run_l3_end_to_end(self, qa_pairs: list[QAPair]) -> L3Result:
+    for qa in qa_pairs:
+        # 1. 检索
+        context = self._retrieve_context(qa)
+        
+        # 2. 生成答案
+        generated_answer = self._generate_answer(qa.question, context)
+        
+        # 3. LLM 评判
+        scores = self._evaluate_answer(
+            question=qa.question,
+            generated_answer=generated_answer,
+            reference_answer=qa.reference_answer,
+            context=context
+        )
+        
+        # 归一化到 0-1
+        correctness = scores["correctness"] / 5.0
+        faithfulness = scores["faithfulness"] / 5.0
+```
+
+---
+
+## 对比实验配置
+
+### 1. 切换 Index 类型
+
+支持的索引类型：`FLAT`, `HNSW`, `IVF_FLAT`
+
+```python
+from evaluation.config import EvaluationConfig, ChunkStrategy
+from evaluation.data_preparation.collection_builder import CollectionBuilder
+
+config = EvaluationConfig()
+builder = CollectionBuilder(config)
+
+# 创建不同索引类型的 collection
+builder.create_collection(
+    strategy=ChunkStrategy.PARAGRAPH,
+    index_type="HNSW",           # 或 "FLAT", "IVF_FLAT"
+    drop_if_exists=True
+)
+```
+
+**完整对比实验**:
+```python
+from evaluation.runner import EvaluationRunner
+from rag.milvus import MilvusProvider
+
+results = {}
+for index_type in ["FLAT", "HNSW", "IVF_FLAT"]:
+    # 1. 重建 collection
+    builder.create_collection(ChunkStrategy.PARAGRAPH, index_type=index_type)
+    pipeline.rebuild_from_chunks(ChunkStrategy.PARAGRAPH)
+    
+    # 2. 运行评估
+    with builder.use_chunk_strategy(ChunkStrategy.PARAGRAPH):
+        milvus = MilvusProvider()
+        runner = EvaluationRunner(rag_client=milvus, config=config)
+        report = runner.run_all()
+        results[index_type] = report
+```
+
+---
+
+### 2. 切换 Chunk 策略
+
+支持的分块策略（定义在 `evaluation/config.py`）:
+
+| 策略 | 说明 |
+|------|------|
+| `PARAGRAPH` | 按段落分块（默认） |
+| `SENTENCE` | 按句子分块（更细粒度） |
+| `CONTEXTUAL` | 带上下文前缀的分块 |
+
+```python
+from evaluation.config import ChunkStrategy
+
+# 使用不同策略
+for strategy in [ChunkStrategy.PARAGRAPH, ChunkStrategy.SENTENCE]:
+    with builder.use_chunk_strategy(strategy):
+        milvus = MilvusProvider()
+        runner = EvaluationRunner(rag_client=milvus)
+        report = runner.run_all()
+```
+
+**注意**: 不同策略需要分别准备数据：
+```bash
+# 为每种策略准备 chunks（会创建不同的 collection）
+uv run python scripts/run_full_evaluation.py --prepare-only --sample 20
+```
+
+---
+
+### 3. 切换 RAG 类型（Agentic vs Non-Agentic）
+
+**Non-Agentic（当前实现）**: 直接向量检索
+```python
+# 直接调用 MilvusProvider
+results = milvus.search_abstracts(query, k=10)
+```
+
+**Agentic RAG（扩展）**: 需要实现 AgenticSearcher
+```python
+# 使用 Agent 进行多步推理检索
+from agents.searcher import AgenticSearcher
+
+class AgenticRAG:
+    def __init__(self, milvus: MilvusProvider, llm):
+        self.milvus = milvus
+        self.llm = llm
+        self.searcher = AgenticSearcher(milvus, llm)
+    
+    def search_abstracts(self, query: str, k: int = 10):
+        # Agent 决定如何检索
+        return self.searcher.search(query, k)
+```
+
+**对比方法**:
+```python
+# Non-Agentic
+runner_basic = EvaluationRunner(rag_client=milvus)
+
+# Agentic  
+agentic_rag = AgenticRAG(milvus, llm)
+runner_agentic = EvaluationRunner(rag_client=agentic_rag)
+
+# 对比
+report_basic = runner_basic.run_all()
+report_agentic = runner_agentic.run_all()
+```
+
+---
+
+### 4. 完整 12 配置对比实验
+
+```python
+"""
+12 = 2 (chunk) × 3 (index) × 2 (agentic)
+"""
+
+from itertools import product
+
+chunk_strategies = [ChunkStrategy.PARAGRAPH, ChunkStrategy.SENTENCE]
+index_types = ["FLAT", "HNSW", "IVF_FLAT"]
+agentic_modes = [False, True]
+
+all_results = []
+
+for chunk, index, agentic in product(chunk_strategies, index_types, agentic_modes):
+    config_name = f"{chunk.value}_{index}_{'agentic' if agentic else 'basic'}"
+    
+    # 1. 准备 collection
+    builder.create_collection(chunk, index_type=index, drop_if_exists=True)
+    pipeline.rebuild_from_chunks(chunk)
+    
+    # 2. 选择 RAG 客户端
+    with builder.use_chunk_strategy(chunk):
+        milvus = MilvusProvider()
+        rag_client = AgenticRAG(milvus, llm) if agentic else milvus
+        
+        # 3. 运行评估
+        runner = EvaluationRunner(rag_client=rag_client, llm_client=llm)
+        report = runner.run_all()
+        
+        all_results.append({
+            "config": config_name,
+            "l1_mrr": report.l1_paper_discovery.mrr,
+            "l1_hit_rate": report.l1_paper_discovery.hit_rate,
+            "l2_precision": report.l2_section_retrieval.overall_precision,
+            "l3_accuracy": report.l3_end_to_end.overall_accuracy,
+        })
+
+# 输出对比表
+import pandas as pd
+df = pd.DataFrame(all_results)
+print(df.to_markdown())
+```
+
+---
+
+## 数据流程
+
+### 目录结构
 
 ```
 evaluation/
-├── __init__.py
-├── README.md
-├── config.py                 # 配置定义
-├── schemas.py                # 数据结构定义
-├── pipeline.py               # 完整评估流水线
-├── runner.py                 # 评估执行器
-├── rag_evaluator.py          # 评估指标计算
-│
-├── data_preparation/         # 数据准备模块
-│   ├── __init__.py
-│   ├── data_exporter.py      # 从业务库导出数据
-│   ├── pdf_downloader.py     # PDF 下载器
-│   ├── chunk_processor.py    # 分块处理器 (paragraph/contextual)
-│   ├── collection_builder.py # Collection 构建器
-│   ├── pipeline.py           # 数据准备流水线
-│   └── prompts.py            # Contextual Chunking prompt
-│
-├── annotation/               # 论文标注模块 (Paper-level)
-│   ├── __init__.py
-│   ├── paper_annotator.py    # Paper-level 标注
-│   └── prompts.py            # 标注 prompt 模板
-│
-└── qa_generation/            # QA 生成模块
-    ├── __init__.py
-    ├── qa_generator.py       # QA pairs 生成器 (利用 context_prefix)
-    └── prompts.py            # QA 生成 prompt 模板
+├── data/
+│   ├── papers_source.jsonl    # 从业务库导出的论文元数据
+│   ├── pdfs/                  # 下载的 PDF 文件（缓存）
+│   ├── chunks/
+│   │   ├── paragraph/         # PARAGRAPH 策略的 chunks
+│   │   │   ├── {doc_id}.json
+│   │   │   └── ...
+│   │   └── sentence/          # SENTENCE 策略的 chunks
+│   ├── ground_truth.json      # 生成的 QA pairs
+│   └── reports/
+│       └── report_{id}_{timestamp}.json
 ```
 
-## 实验设计
+### Chunk 文件格式
 
-### 变量
-
-| 变量 | 选项 | 隔离方式 |
-|------|------|----------|
-| Chunk 策略 | paragraph / contextual | Collection 级别 |
-| Index 策略 | FLAT / HNSW / IVF | Index 级别（rebuild） |
-| Agentic RAG | 开 / 关 | 代码逻辑 |
-
-### Collection 切换方式
-
-**通过修改 settings 切换 collection，复用 MilvusProvider：**
-
-```python
-from settings import settings
-
-# 方式 1: 直接修改
-settings.milvus_collection = "papers_eval_paragraph"
-rag = MilvusProvider()
-
-# 方式 2: Context Manager (推荐)
-with eval_collection("papers_eval_contextual"):
-    rag = MilvusProvider()
-```
-
-### Collection 设计
-
-```
-papers                       # 业务库 (不动)
-papers_eval_paragraph        # 评估: 传统段落分块
-papers_eval_contextual       # 评估: Contextual Chunking
-```
-
-### 评估矩阵 (12 种实验)
-
-| Chunk | Index | Agentic | 实验名 |
-|-------|-------|---------|--------|
-| paragraph | FLAT | ❌ | para_flat |
-| paragraph | FLAT | ✅ | para_flat_agentic |
-| paragraph | HNSW | ❌ | para_hnsw |
-| paragraph | HNSW | ✅ | para_hnsw_agentic |
-| paragraph | IVF | ❌ | para_ivf |
-| paragraph | IVF | ✅ | para_ivf_agentic |
-| contextual | FLAT | ❌ | ctx_flat |
-| contextual | FLAT | ✅ | ctx_flat_agentic |
-| contextual | HNSW | ❌ | ctx_hnsw |
-| contextual | HNSW | ✅ | ctx_hnsw_agentic |
-| contextual | IVF | ❌ | ctx_ivf |
-| contextual | IVF | ✅ | ctx_ivf_agentic |
-
-## 数据流
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Step 1: 数据准备                                            │
-│                                                              │
-│   1.1 从业务库导出论文元数据                                 │
-│       → evaluation/data/papers_source.jsonl                 │
-│                                                              │
-│   1.2 下载 PDF                                               │
-│       → evaluation/data/pdfs/{doc_id}.pdf                   │
-│                                                              │
-│   1.3 分块处理                                               │
-│       Paragraph: 直接分块                                    │
-│       Contextual: 每个 chunk → LLM → context_prefix         │
-│       → evaluation/data/chunks/{strategy}/{doc_id}.jsonl    │
-│                                                              │
-│   1.4 入库 (通过修改 settings 切换 collection)               │
-│       → papers_eval_{strategy} collections                  │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Step 2: Paper-level 标注 (可选)                              │
-│                                                              │
-│   每篇论文: title + abstract → LLM → summary, keywords       │
-│   → evaluation/data/papers_summaries.jsonl                  │
-│                                                              │
-│   注: 主要用于按 research_area 分组生成 QA                   │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Step 3: QA 生成 (利用 context_prefix)                        │
-│                                                              │
-│   输入给 LLM:                                                │
-│   - Paper title + abstract                                   │
-│   - 所有 chunks 的 context_prefix 列表                       │
-│                                                              │
-│   输出 Ground Truth:                                         │
-│   - Paper-level QA: expected_doc_ids                        │
-│   - Chunk-level QA: expected_doc_ids + expected_chunk_ids   │
-│                                                              │
-│   → evaluation/data/ground_truth.json                       │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Step 4: 评估                                                │
-│                                                              │
-│   对 12 种实验配置:                                          │
-│   1. 修改 settings 切换 collection                          │
-│   2. rebuild_index (FLAT/HNSW/IVF)                          │
-│   3. 运行检索 (basic/agentic)                                │
-│   4. 计算 L1/L2/L3 指标                                      │
-│                                                              │
-│   → evaluation/data/reports/report_{timestamp}.json         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Contextual Chunking 与 QA 生成的结合
-
-### 核心思路
-
-Contextual Chunking 生成的 `context_prefix` 本身就是对 chunk 的描述，
-在 QA 生成时直接复用，无需额外的 chunk-level annotation。
-
-### 数据流示例
-
-**Step 1.3 保存的 chunk 数据：**
-```jsonl
-{"chunk_index": 0, "context_prefix": "This is the abstract introducing...", "original_text": "..."}
-{"chunk_index": 1, "context_prefix": "This chunk describes background...", "original_text": "..."}
-{"chunk_index": 5, "context_prefix": "This chunk presents the core algorithm...", "original_text": "..."}
-{"chunk_index": 12, "context_prefix": "This chunk shows results on dataset X...", "original_text": "..."}
-```
-
-**Step 3 QA 生成时的输入：**
-```
-Paper: "Attention Is All You Need"
-Abstract: "We propose the Transformer..."
-
-Chunk Contexts:
-[0] This is the abstract introducing the Transformer architecture...
-[1] This chunk describes the background of sequence modeling...
-[5] This chunk presents the multi-head attention mechanism...
-[12] This chunk shows BLEU scores on WMT translation...
-```
-
-**Step 3 QA 生成的输出：**
 ```json
-[
-  {
-    "question": "What is the core innovation of the Transformer?",
-    "difficulty": "medium",
-    "expected_doc_ids": ["doc_123"],
-    "expected_chunk_ids": [5],
-    "reference_answer": "Multi-head self-attention mechanism"
-  },
-  {
-    "question": "What BLEU score did Transformer achieve?",
-    "difficulty": "medium", 
-    "expected_doc_ids": ["doc_123"],
-    "expected_chunk_ids": [12],
-    "reference_answer": "28.4 on WMT En-De"
-  }
-]
+{
+  "doc_id": "db31bfbb-b56a-4547-8c2f-5ae2b2466c52",
+  "title": "Security at the End of the Tunnel...",
+  "strategy": "paragraph",
+  "chunks": [
+    {
+      "chunk_index": 0,
+      "chunk_text": "We present a qualitative study...",
+      "section_title": "Abstract",
+      "section_category": 0,
+      "contextual_prefix": "This paper discusses VPN security..."
+    }
+  ]
+}
 ```
 
-## 评估指标
+### Ground Truth 格式
 
-### L1: Paper Discovery
-- Precision@K, Recall@K
-- MRR (Mean Reciprocal Rank)
-- Hit Rate
-- Latency
+```json
+{
+  "version": "1.0",
+  "created_at": "2025-11-26T21:29:18",
+  "total_papers": 8,
+  "difficulty_distribution": {"easy": 2, "medium": 2, "hard": 1},
+  "qa_pairs": [
+    {
+      "id": 1,
+      "question": "Which paper discusses corporate VPN mental models?",
+      "difficulty": "easy",
+      "expected_doc_ids": ["db31bfbb-..."],
+      "expected_chunk_ids": null,
+      "answer_source": "abstract",
+      "reference_answer": "The paper 'Security at the End...' discusses..."
+    }
+  ]
+}
+```
 
-### L2: Section/Chunk Retrieval
-- Chunk Precision: 检索到的 chunk 是否是期望的
-- Chunk Recall: 期望的 chunk 是否被检索到
-- Section Precision/Recall: 按 section_category 统计
+### 评估报告格式
 
-### L3: End-to-End QA
-- Accuracy (by difficulty: easy/medium/hard)
-- Answer Relevance
-- Faithfulness
+```json
+{
+  "run_id": "7c015e51",
+  "run_at": "2025-11-27T11:00:21",
+  "total_qa_pairs": 5,
+  "rag_provider": "MilvusProvider",
+  "embedding_model": "qwen3-embedding:4b",
+  "l1_paper_discovery": {
+    "precision_at_5": 0.24,
+    "precision_at_10": 0.12,
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "mrr": 1.0,
+    "hit_rate": 1.0,
+    "mean_latency_ms": 695.1
+  },
+  "l2_section_retrieval": {
+    "overall_precision": 0.25,
+    "overall_recall": 0.5,
+    "method_precision": 0.25
+  },
+  "l3_end_to_end": {
+    "easy_accuracy": 1.0,
+    "medium_accuracy": 0.6,
+    "hard_accuracy": 1.0,
+    "overall_accuracy": 0.84,
+    "faithfulness": 1.0
+  }
+}
+```
 
-## LLM 调用统计
+---
 
-| 阶段 | 调用次数 | 说明 |
-|------|---------|------|
-| Contextual Chunking | 20,000 | 500 篇 × 40 chunks |
-| Paper Annotation | 500 | 每篇论文一次 (可选) |
-| QA Generation | ~20 | 分批生成，每批 5-10 篇 |
-| **总计** | ~20,500 | |
+## API 参考
 
-## 使用方式
+### EvaluationRunner
 
 ```python
-from evaluation.pipeline import EvaluationPipeline
-from evaluation.config import EvaluationConfig
-
-# 配置
-config = EvaluationConfig(
-    sample_size=100,  # 抽样 100 篇论文
-    num_qa_pairs=50,  # 生成 50 个问题
-)
-
-# 初始化
-pipeline = EvaluationPipeline(
-    source_rag_client=rag,
-    llm_client=llm,
-    config=config
-)
-
-# 运行完整流程
-report = pipeline.run_full_pipeline()
-
-# 或分步运行
-papers = pipeline.step1_prepare_data()
-annotations = pipeline.step2_annotate_papers(papers)  # 可选
-ground_truth = pipeline.step3_generate_qa(annotations)
-report = pipeline.step4_run_evaluation(ground_truth)
+class EvaluationRunner:
+    def __init__(
+        self,
+        rag_client: RAG,                    # MilvusProvider 或兼容接口
+        llm_client: BaseChatModel = None,   # L3 评估需要
+        config: EvaluationConfig = None
+    ):
+        ...
+    
+    def run_all(self, ground_truth: GroundTruth = None) -> EvaluationReport:
+        """运行完整评估（L1 + L2 + L3）"""
+    
+    def run_l1_paper_discovery(self, qa_pairs: list[QAPair]) -> L1Result:
+        """L1: 论文发现评估"""
+    
+    def run_l2_chunk_retrieval(self, qa_pairs: list[QAPair]) -> L2Result:
+        """L2: Chunk 检索评估"""
+    
+    def run_l3_end_to_end(self, qa_pairs: list[QAPair]) -> L3Result:
+        """L3: 端到端 QA 评估"""
+    
+    def load_ground_truth(self) -> GroundTruth:
+        """加载 Ground Truth"""
+    
+    def save_report(self, report: EvaluationReport) -> Path:
+        """保存评估报告"""
 ```
 
-## 数据目录结构
+### CollectionBuilder
 
+```python
+class CollectionBuilder:
+    def create_collection(
+        self,
+        strategy: ChunkStrategy,
+        index_type: str = "FLAT",
+        drop_if_exists: bool = False
+    ):
+        """创建评估 collection"""
+    
+    @contextmanager
+    def use_chunk_strategy(self, strategy: ChunkStrategy):
+        """Context Manager: 临时切换到指定策略的 collection"""
+        # 用法:
+        # with builder.use_chunk_strategy(ChunkStrategy.PARAGRAPH):
+        #     milvus = MilvusProvider()  # 使用切换后的 collection
 ```
-evaluation/data/
-├── papers_source.jsonl       # 导出的论文元数据
-├── pdfs/                     # 下载的 PDF 文件
-│   └── {doc_id}.pdf
-├── chunks/                   # 分块缓存 (含 context_prefix)
-│   ├── paragraph/
-│   │   └── {doc_id}.jsonl
-│   └── contextual/
-│       └── {doc_id}.jsonl
-├── papers_summaries.jsonl    # Paper-level 标注 (可选)
-├── ground_truth.json         # QA 测试集 (含 chunk-level)
-└── reports/                  # 评估报告
-    └── report_{timestamp}.json
+
+### QAGenerator
+
+```python
+class QAGenerator:
+    def generate(
+        self,
+        strategy: ChunkStrategy = ChunkStrategy.PARAGRAPH,
+        num_questions: int = 50,
+        difficulty_distribution: dict = {"easy": 0.4, "medium": 0.4, "hard": 0.2}
+    ) -> GroundTruth:
+        """生成 QA pairs"""
+    
+    def save_ground_truth(self, ground_truth: GroundTruth) -> Path:
+        """保存到文件"""
 ```
+
+### DataPreparationPipeline
+
+```python
+class DataPreparationPipeline:
+    def run(
+        self,
+        strategies: list[ChunkStrategy] = None,
+        sample_size: int = None,
+        drop_existing: bool = False
+    ) -> PipelineResult:
+        """运行完整数据准备流程"""
+    
+    def rebuild_from_chunks(
+        self,
+        strategy: ChunkStrategy,
+        drop_existing: bool = True
+    ) -> int:
+        """从已有 chunks 文件重建 collection（快速）"""
+```
+
+---
+
+## 最佳实践
+
+### 1. 快速迭代测试
+
+```bash
+# 使用小样本快速验证
+uv run python scripts/run_full_evaluation.py --full --sample 10 --num-questions 15 --no-l3
+```
+
+### 2. 只更新 QA 不重新处理 PDF
+
+```bash
+# 使用已有 chunks 重新生成问题
+uv run python scripts/run_full_evaluation.py --generate-qa --num-questions 50
+```
+
+### 3. 对比不同索引效果
+
+```python
+# 使用 rebuild_from_chunks 快速切换索引
+for index_type in ["FLAT", "HNSW"]:
+    builder.create_collection(ChunkStrategy.PARAGRAPH, index_type=index_type)
+    pipeline.rebuild_from_chunks(ChunkStrategy.PARAGRAPH)
+    # 运行评估...
+```
+
+### 4. 查看历史报告
+
+```bash
+ls evaluation/data/reports/
+cat evaluation/data/reports/report_xxx.json | jq .
+```
+
+---
+
+## 常见问题
+
+### Q: L3 评估为什么这么慢？
+A: L3 需要对每个问题调用两次 LLM（生成答案 + 评判质量）。可以用 `--no-l3` 跳过。
+
+### Q: 如何增加测试问题数量？
+A: 运行 `--generate-qa --num-questions 100`，会覆盖现有的 ground_truth.json。
+
+### Q: 评估 collection 和业务 collection 会冲突吗？
+A: 不会。评估使用独立的 collection（如 `papers_eval_paragraph`），通过 `CollectionBuilder.use_chunk_strategy()` 临时切换。
+
+### Q: 如何添加新的评估指标？
+A: 在 `src/evaluation/schemas.py` 添加字段，在 `src/evaluation/runner.py` 实现计算逻辑。
