@@ -1,5 +1,5 @@
 from langchain.agents import create_agent
-from models import init_kimi_k2
+from models import get_llm_by_usage
 from prompts.template import apply_prompt_template
 from langchain.messages import AIMessage
 from langchain.tools import tool
@@ -80,7 +80,7 @@ def invoke_coordinator(user_input:str, enable_clarification:bool) -> dict:
     main_agent = create_agent(
         #model="google_genai:gemini-flash-lite-latest",
         #model=init_chat_model_from_modelscope("Qwen/Qwen3-VL-235B-A22B-Instruct"),
-        model=init_kimi_k2(),
+        model=get_llm_by_usage('agentic'),
         tools=[handoff_to_collector, handoff_to_RAG, need_clarification],
     )
     

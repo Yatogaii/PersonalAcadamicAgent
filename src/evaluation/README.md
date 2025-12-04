@@ -2,11 +2,12 @@
 
 ## 目录
 1. [快速开始](#快速开始)
-2. [架构概览](#架构概览)
-3. [评估指标详解](#评估指标详解)
-4. [对比实验配置](#对比实验配置)
-5. [数据流程](#数据流程)
-6. [API 参考](#api-参考)
+2. [问题生成策略](#问题生成策略)
+3. [架构概览](#架构概览)
+4. [评估指标详解](#评估指标详解)
+5. [对比实验配置](#对比实验配置)
+6. [数据流程](#数据流程)
+7. [API 参考](#api-参考)
 
 ---
 
@@ -135,6 +136,112 @@ uv run python scripts/run_full_evaluation.py --compare --skip-data-prep
 
 ---
 
+## 问题生成策略
+
+### 设计理念
+
+传统的 RAG 评估问题往往过于简单（单论文、关键词匹配），无法真正测试系统的综合能力。我们设计了 **4 层难度** 的问题生成策略，重点测试跨论文综合能力。
+
+### 4 层难度体系
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              问题生成策略 (V2)                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Level 1: 单论文精确题 (Easy) - 20%                                          │
+│  ─────────────────────────────────                                           │
+│  • 问题: "哪篇论文提出了 TEE-based bot detection?"                            │
+│  • 特点: 包含论文关键词，直接匹配即可找到                                       │
+│  • 答案来源: Abstract                                                        │
+│  • 测试能力: 基础检索                                                         │
+│                                                                              │
+│  Level 2: 单论文推理题 (Medium) - 30%                                        │
+│  ─────────────────────────────────                                           │
+│  • 问题: "如何在保证安全的前提下减少 bot 验证对用户体验的影响?"                   │
+│  • 特点: 不包含明显关键词，需要语义理解                                         │
+│  • 答案来源: Method + Evaluation sections                                    │
+│  • 测试能力: 语义检索 + 理解方法论                                             │
+│                                                                              │
+│  Level 3: 跨论文比较题 (Hard) - 30%                                          │
+│  ─────────────────────────────────                                           │
+│  • 问题: "不同 side-channel 防御方法在性能和安全性上有什么权衡?"                 │
+│  • 特点: 需要比较 2-3 篇相关论文，理解方法差异                                   │
+│  • 答案来源: 多篇论文的 Method sections                                        │
+│  • 测试能力: 多文档检索 + 比较分析                                             │
+│                                                                              │
+│  Level 4: 领域综述题 (Expert) - 20%                                          │
+│  ─────────────────────────────────                                           │
+│  • 问题: "当前安全研究中常用的用户研究方法论有哪些模式?"                          │
+│  • 特点: 需要综合 3+ 篇论文，总结研究趋势                                       │
+│  • 答案来源: 多篇论文的综合信息                                                │
+│  • 测试能力: 全面检索 + 知识综合                                               │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 论文聚类
+
+为了生成高质量的跨论文问题（Level 3 和 Level 4），系统首先对论文进行聚类：
+
+1. **关键词提取**: 从每篇论文的 title + abstract 提取关键词
+2. **相似度计算**: 使用 Jaccard 相似度计算论文间的关联
+3. **聚类分组**: 将相关论文分到同一组
+4. **主题生成**: 使用 LLM 为每个聚类生成主题描述
+
+```python
+# 聚类示例
+Cluster 0: "Side-channel attack detection"
+  - Paper A: Timing attack detection with bounded error
+  - Paper B: Hardware-based side-channel mitigation
+  - Paper C: Constant-time implementation verification
+
+Cluster 1: "User security behavior studies"  
+  - Paper D: VPN user mental models
+  - Paper E: Security tool usability evaluation
+```
+
+### 问题质量对比
+
+**旧版问题 (V1)**:
+```json
+{
+  "question": "What techniques can be used to detect timing vulnerabilities?",
+  "expected_doc_ids": ["paper_a"],
+  "difficulty": "medium"
+}
+```
+❌ 问题：单论文、关键词明显、答案唯一
+
+**新版问题 (V2)**:
+```json
+{
+  "question": "How do different approaches to detecting timing vulnerabilities compare in terms of accuracy vs. performance overhead?",
+  "expected_doc_ids": ["paper_a", "paper_b", "paper_c"],
+  "difficulty": "hard",
+  "is_multi_paper": true
+}
+```
+✅ 改进：跨论文比较、需要综合理解、测试真实 RAG 能力
+
+### 使用方法
+
+```bash
+# 使用新策略生成问题（默认 V2）
+uv run python scripts/run_full_evaluation.py --generate-qa --num-questions 50
+
+# 自定义难度分布
+# 在代码中设置:
+# difficulty_distribution = {
+#     "easy": 0.1,    # 10% Level 1
+#     "medium": 0.2,  # 20% Level 2
+#     "hard": 0.4,    # 40% Level 3 (比较题)
+#     "expert": 0.3   # 30% Level 4 (综述题)
+# }
+```
+
+---
+
 ## 架构概览
 
 ### 系统架构图
@@ -148,8 +255,8 @@ uv run python scripts/run_full_evaluation.py --compare --skip-data-prep
 │  │ Data Preparation │    │  QA Generation  │    │   Runner     │ │
 │  │                  │    │                 │    │              │ │
 │  │ • DataExporter   │───▶│ • QAGenerator   │───▶│ • L1 Eval    │ │
-│  │ • PDFLoader      │    │ • Prompts       │    │ • L2 Eval    │ │
-│  │ • CollectionBuilder│  │                 │    │ • L3 Eval    │ │
+│  │ • PDFLoader      │    │ • PaperClusterer│    │ • L2 Eval    │ │
+│  │ • CollectionBuilder│  │ • Prompts V2    │    │ • L3 Eval    │ │
 │  └─────────────────┘    └─────────────────┘    └──────────────┘ │
 │           │                      │                     │         │
 │           ▼                      ▼                     ▼         │
@@ -179,7 +286,8 @@ uv run python scripts/run_full_evaluation.py --compare --skip-data-prep
 | 模块 | 路径 | 职责 |
 |------|------|------|
 | **EvaluationRunner** | `src/evaluation/runner.py` | 执行 L1/L2/L3 评估，生成报告 |
-| **QAGenerator** | `src/evaluation/qa_generation/qa_generator.py` | 从 chunks 生成测试 QA pairs |
+| **QAGenerator** | `src/evaluation/qa_generation/qa_generator.py` | 4 级难度问题生成 |
+| **PaperClusterer** | `src/evaluation/qa_generation/paper_clustering.py` | 论文聚类（用于跨论文问题） |
 | **DataPreparationPipeline** | `src/evaluation/data_preparation/pipeline.py` | 数据导出、PDF处理、chunk保存 |
 | **CollectionBuilder** | `src/evaluation/data_preparation/collection_builder.py` | 管理评估 collection，支持策略切换 |
 | **EvaluationConfig** | `src/evaluation/config.py` | 配置管理（路径、策略、参数） |

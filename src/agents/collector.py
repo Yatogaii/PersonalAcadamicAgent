@@ -1,4 +1,4 @@
-from models import init_kimi_k2
+from models import get_llm_by_usage
 from prompts.template import apply_prompt_template
 from settings import settings
 from utils import get_parsed_content_by_selector, get_details_from_html
@@ -242,7 +242,7 @@ def invoke_collector(conference_name: str, year: int, round: str="unspecified") 
     round="unspecified" means the agent should discover available rounds itself.
     """
     collector_agent = create_agent(
-        model=init_kimi_k2(),
+        model=get_llm_by_usage('agentic'),
         tools=[search_by_ddg, get_parsed_html, get_existing_rounds_from_db, report_progress, enrich_papers_with_details],
     )
     msgs = apply_prompt_template("collector", {

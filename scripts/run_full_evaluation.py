@@ -48,7 +48,7 @@ def step1_export_and_prepare(
         all_strategies: 是否准备所有 chunk 策略 (paragraph + contextual)
     """
     from rag.milvus import MilvusProvider
-    from models import init_chat_model_from_modelscope
+    from models import get_llm_by_usage
     from evaluation.config import EvaluationConfig, ChunkStrategy
     from evaluation.data_preparation.pipeline import DataPreparationPipeline
     
@@ -59,7 +59,7 @@ def step1_export_and_prepare(
     # 初始化
     config = EvaluationConfig()
     source_rag = MilvusProvider()
-    llm = init_chat_model_from_modelscope()
+    llm = get_llm_by_usage('evaluation')
     
     print(f"源 Collection: {source_rag.collection}")
     print(f"评估数据目录: {config.data_dir}")
@@ -98,7 +98,7 @@ def step2_generate_qa(num_questions: int = 50):
     """
     Step 2: 从 chunks 生成 QA pairs
     """
-    from models import init_chat_model_from_modelscope
+    from models import get_llm_by_usage
     from evaluation.config import EvaluationConfig, ChunkStrategy
     from evaluation.qa_generation.qa_generator import QAGenerator
     
@@ -107,7 +107,7 @@ def step2_generate_qa(num_questions: int = 50):
     print("=" * 70)
     
     config = EvaluationConfig()
-    llm = init_chat_model_from_modelscope()
+    llm = get_llm_by_usage('evaluation')
     
     generator = QAGenerator(llm_client=llm, config=config)
     
@@ -148,7 +148,7 @@ def step3_run_evaluation(run_l3: bool = True):
     """
     Step 3: 运行评估
     """
-    from models import init_chat_model_from_modelscope
+    from models import get_llm_by_usage
     from rag.milvus import MilvusProvider
     from evaluation.config import EvaluationConfig, ChunkStrategy
     from evaluation.runner import EvaluationRunner
@@ -166,7 +166,7 @@ def step3_run_evaluation(run_l3: bool = True):
         return None
     
     builder = CollectionBuilder(config)
-    llm = init_chat_model_from_modelscope() if run_l3 else None
+    llm = get_llm_by_usage('evaluation') if run_l3 else None
     
     print(f"Ground Truth: {config.ground_truth_file}")
     print(f"评估 Collection: papers_eval_paragraph")
@@ -322,7 +322,7 @@ def run_comparison(
         resume: 是否从缓存恢复（跳过已完成的实验）
         clear_cache: 清除缓存后重新运行
     """
-    from models import init_chat_model_from_modelscope
+    from models import get_llm_by_usage
     from evaluation.config import EvaluationConfig
     from evaluation.comparison_runner import ComparisonRunner
     
@@ -344,7 +344,7 @@ def run_comparison(
     print("=" * 70)
     
     # 初始化 LLM
-    llm = init_chat_model_from_modelscope()
+    llm = get_llm_by_usage('evaluation')
     
     # 创建对比运行器
     runner = ComparisonRunner(llm_client=llm, config=config)

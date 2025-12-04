@@ -17,7 +17,7 @@ from langchain.agents.structured_output import ToolStrategy
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
 
-from models import init_kimi_k2
+from models import get_llm_by_usage
 from tools.common_tools import get_raw_html_content
 from prompts.template import apply_prompt_template
 from utils import extract_text_from_message_content, extract_json_from_codeblock
@@ -78,7 +78,7 @@ def get_parsed_html_by_llm_summary(url: str):
 def get_html_selector_by_llm(url: str) -> str:
     agent = create_agent(
         #model="google_genai:gemini-flash-latest",
-        model=init_kimi_k2(),
+        model=get_llm_by_usage('agentic'),
         #response_format=ToolStrategy(HTMLSelector),
         tools=[get_raw_html_content, read_file, bash_exec],
     )

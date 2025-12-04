@@ -11,7 +11,7 @@ import json
 import re
 
 from logging_config import logger
-from models import init_chat_model_from_modelscope
+from models import get_llm_by_usage
 
 if TYPE_CHECKING:
     from evaluation.qa_generation.qa_generator import ChunkInfo
@@ -78,8 +78,8 @@ class PaperClusterer:
         # 如果没有提供 LLM 客户端，则使用 ModelScope（init_chat_model_from_modelscope）初始化
         if not self.llm:
             try:
-                logger.info("No llm_client provided, initializing models.init_chat_model_from_modelscope() as fallback")
-                self.llm = init_chat_model_from_modelscope()
+                logger.info("No llm_client provided, initializing default evaluation LLM via get_llm_by_usage('evaluation') as fallback")
+                self.llm = get_llm_by_usage('evaluation')
             except Exception as e:
                 logger.warning(f"Failed to init fallback model: {e}, falling back to keyword clustering")
                 return self.cluster_by_keywords(all_chunks, min_cluster_size, max_clusters)
