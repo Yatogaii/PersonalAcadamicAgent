@@ -8,3 +8,5 @@ htmls/*
 evaluation/
 saved_html_content/
 tests/
+
+.vscode
