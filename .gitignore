@@ -4,3 +4,7 @@
 __pycache__
 
 htmls/*
+
+evaluation/
+saved_html_content/
+tests/
