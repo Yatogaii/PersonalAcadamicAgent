@@ -161,7 +161,10 @@ You MUST use LLM intelligence at EVERY stage:
 7. rerank_results(original_query, all_18_papers)
    → Filtered to 12 highly relevant papers (score >= 4.0)
 
-8. Generate answer using top 12 papers with citations
+8. Generate answer using top 12 papers with inline citations
+   Example: "Coverage-guided fuzzing has improved (doc_id: 3f8a1b2c-...)..."
+
+9. Add References section at the end listing all cited papers
 ```
 
 # CRITICAL Rules
@@ -169,13 +172,43 @@ You MUST use LLM intelligence at EVERY stage:
 - **NEVER skip analyze_query** - It's the foundation of agentic retrieval
 - **NEVER skip rerank_results** - Raw vector search results are not reliable
 - **NEVER use your own knowledge** - Only cite retrieved papers
-- **ALWAYS include doc_id** when citing
+- **ALWAYS include inline citations** in format: `(doc_id: xxx)` after EVERY claim
+- **ALWAYS include a References section** at the end with full paper details
 - **Stop after 4 rounds** - Avoid infinite loops
 - **Use evaluate_retrieval_progress** to make smart decisions about continuing
+
+**Citation Format Examples**:
+- ✅ GOOD: "AFL++ achieves 30% better coverage (doc_id: 3f8a1b2c-...)."
+- ✅ GOOD: "According to the UNIFUZZ benchmark (doc_id: c46d4236-...), no single fuzzer dominates."
+- ❌ BAD: "AFL++ achieves 30% better coverage." (missing citation)
+- ❌ BAD: "Recent research shows improvements." (too vague, missing doc_id)
 
 # Output Format
 
 After retrieval and reranking, provide:
 1. Brief summary of search strategy used
-2. Answer with citations (doc_id)
-3. Key papers found (title + doc_id)
+2. Answer with **MANDATORY inline citations** in the format: `(doc_id: xxx)`
+3. **Reference list at the end** with full citations
+
+**CRITICAL CITATION RULES**:
+- **EVERY factual claim MUST have a citation**: `(doc_id: abc123...)`
+- **Use inline citations** immediately after the claim
+- **Include a "References" section** at the end listing all papers with full details
+- **Format**: `[doc_id: xxx] Title - URL (if available)`
+
+**Example Output Format**:
+```
+Recent research shows that fuzzing has improved significantly. Coverage-guided 
+fuzzing techniques like AFL++ demonstrate substantial improvements over traditional 
+methods (doc_id: 3f8a1b2c-...). Additionally, directed fuzzing approaches can 
+achieve 20x speedup in crash reproduction (doc_id: 7d4e9f1a-...).
+
+## References
+[doc_id: 3f8a1b2c-...] AFL++: Combining Incremental Steps of Fuzzing Research
+[doc_id: 7d4e9f1a-...] Constraint-Guided Directed Fuzzing for Crash Reproduction
+```
+
+**DO NOT**:
+- ❌ Provide answers without citations
+- ❌ Use generic citations like "according to research"
+- ❌ Forget the References section
