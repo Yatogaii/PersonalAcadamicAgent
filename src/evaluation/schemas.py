@@ -38,9 +38,10 @@ class PaperAnnotation:
 # ============== QA 相关 Schema ==============
 
 class Difficulty(str, Enum):
-    EASY = "easy"       # 关键词匹配即可
-    MEDIUM = "medium"   # 需要语义理解
-    HARD = "hard"       # 跨论文综合
+    EASY = "easy"       # Level 1: 关键词匹配即可
+    MEDIUM = "medium"   # Level 2: 需要语义理解
+    HARD = "hard"       # Level 3: 跨论文比较
+    EXPERT = "expert"   # Level 4: 领域综述
 
 class AnswerSource(str, Enum):
     ABSTRACT = "abstract"
@@ -120,6 +121,7 @@ class L3Result:
     easy_accuracy: float = 0.0
     medium_accuracy: float = 0.0
     hard_accuracy: float = 0.0
+    expert_accuracy: float = 0.0  # Level 4: 领域综述题
     
     # 整体
     overall_accuracy: float = 0.0

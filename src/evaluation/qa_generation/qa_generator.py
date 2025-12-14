@@ -183,14 +183,14 @@ class QAGenerator:
         
         qa_pairs: list[QAPair] = []
         qa_id = 1
-        max_retries = 3
+        batch_size = 5  # 每批生成 5 个问题，提高稳定性
         
         # Level 1: Easy - 单论文精确题
         if easy_count > 0:
             logger.info("Generating Level 1 (Easy) questions...")
-            easy_pairs = self._generate_with_retry(
-                lambda: self.generate_level1_easy(all_chunks, easy_count, start_id=qa_id),
-                easy_count, max_retries, "Level 1"
+            easy_pairs = self._generate_in_batches(
+                lambda count, sid: self._generate_level1_batch(all_chunks, count, sid),
+                easy_count, batch_size, Difficulty.EASY, "Level 1", qa_id
             )
             qa_pairs.extend(easy_pairs)
             qa_id += len(easy_pairs)
@@ -198,9 +198,9 @@ class QAGenerator:
         # Level 2: Medium - 单论文推理题
         if medium_count > 0:
             logger.info("Generating Level 2 (Medium) questions...")
-            medium_pairs = self._generate_with_retry(
-                lambda: self.generate_level2_medium(all_chunks, medium_count, start_id=qa_id),
-                medium_count, max_retries, "Level 2"
+            medium_pairs = self._generate_in_batches(
+                lambda count, sid: self._generate_level2_batch(all_chunks, count, sid),
+                medium_count, batch_size, Difficulty.MEDIUM, "Level 2", qa_id
             )
             qa_pairs.extend(medium_pairs)
             qa_id += len(medium_pairs)
@@ -208,9 +208,9 @@ class QAGenerator:
         # Level 3: Hard - 跨论文比较题
         if hard_count > 0:
             logger.info("Generating Level 3 (Hard/Comparison) questions...")
-            hard_pairs = self._generate_with_retry(
-                lambda: self.generate_level3_comparison(all_chunks, clusters, hard_count, start_id=qa_id),
-                hard_count, max_retries, "Level 3"
+            hard_pairs = self._generate_in_batches(
+                lambda count, sid: self._generate_level3_batch(all_chunks, clusters, count, sid),
+                hard_count, batch_size, Difficulty.HARD, "Level 3", qa_id
             )
             qa_pairs.extend(hard_pairs)
             qa_id += len(hard_pairs)
@@ -218,9 +218,9 @@ class QAGenerator:
         # Level 4: Expert - 领域综述题
         if expert_count > 0:
             logger.info("Generating Level 4 (Expert/Survey) questions...")
-            expert_pairs = self._generate_with_retry(
-                lambda: self.generate_level4_survey(all_chunks, clusters, expert_count, start_id=qa_id),
-                expert_count, max_retries, "Level 4"
+            expert_pairs = self._generate_in_batches(
+                lambda count, sid: self._generate_level4_batch(all_chunks, clusters, count, sid),
+                expert_count, batch_size, Difficulty.EXPERT, "Level 4", qa_id
             )
             qa_pairs.extend(expert_pairs)
         
@@ -234,6 +234,7 @@ class QAGenerator:
                 "easy": len([q for q in qa_pairs if q.difficulty == Difficulty.EASY]),
                 "medium": len([q for q in qa_pairs if q.difficulty == Difficulty.MEDIUM]),
                 "hard": len([q for q in qa_pairs if q.difficulty == Difficulty.HARD]),
+                "expert": len([q for q in qa_pairs if q.difficulty == Difficulty.EXPERT]),
             },
             source_distribution=self._count_source_distribution(qa_pairs),
         )
@@ -241,23 +242,156 @@ class QAGenerator:
         logger.info(f"Total generated: {len(qa_pairs)} questions")
         return ground_truth
     
-    def _generate_with_retry(
-        self, 
-        gen_func, 
-        target_count: int, 
-        max_retries: int,
-        level_name: str
+    def _generate_in_batches(
+        self,
+        gen_func_single_batch,
+        total_count: int,
+        batch_size: int,
+        difficulty: Difficulty,
+        level_name: str,
+        start_id: int = 1
     ) -> list[QAPair]:
-        """带重试的问题生成"""
-        for attempt in range(max_retries):
-            pairs = gen_func()
-            if len(pairs) >= target_count * 0.5:
-                logger.info(f"  {level_name}: Generated {len(pairs)}/{target_count}")
-                return pairs
-            logger.warning(f"  {level_name} attempt {attempt + 1}/{max_retries}: got {len(pairs)}/{target_count}")
+        """
+        分批次生成问题，每批生成 batch_size 个
+        
+        Args:
+            gen_func_single_batch: 生成单批问题的函数，接受 (count, start_id) 参数
+            total_count: 总共需要的问题数
+            batch_size: 每批生成的问题数
+            difficulty: 难度级别
+            level_name: 级别名称（用于日志）
+            start_id: 起始 ID
+        """
+        all_pairs = []
+        current_id = start_id
+        remaining = total_count
+        max_retries_per_batch = 2
+        
+        while remaining > 0:
+            batch_count = min(batch_size, remaining)
+            
+            # 尝试生成这一批
+            for attempt in range(max_retries_per_batch):
+                try:
+                    pairs = gen_func_single_batch(batch_count, current_id)
+                    if pairs:
+                        all_pairs.extend(pairs)
+                        current_id += len(pairs)
+                        remaining -= len(pairs)
+                        logger.debug(f"  {level_name}: Batch done, got {len(pairs)}, total {len(all_pairs)}/{total_count}")
+                        break
+                except Exception as e:
+                    logger.warning(f"  {level_name} batch attempt {attempt + 1} failed: {e}")
+                    if attempt == max_retries_per_batch - 1:
+                        # 最后一次重试失败，跳过这批
+                        remaining -= batch_count
+                        logger.warning(f"  {level_name}: Skipping batch after {max_retries_per_batch} retries")
+        
+        logger.info(f"  {level_name}: Generated {len(all_pairs)}/{total_count}")
+        return all_pairs
+    
+    # ==================== 批次生成内部方法 ====================
+    
+    def _generate_level1_batch(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        count: int,
+        start_id: int
+    ) -> list[QAPair]:
+        """生成一批 Level 1 问题"""
+        paper_summaries = format_for_level1(all_chunks, max_papers=30)
+        
+        prompt = LEVEL1_EASY_PROMPT.format(
+            paper_summaries=paper_summaries,
+            count=count
+        )
+        
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        return self._parse_qa_response(content, Difficulty.EASY, start_id)[:count]
+    
+    def _generate_level2_batch(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        count: int,
+        start_id: int
+    ) -> list[QAPair]:
+        """生成一批 Level 2 问题"""
+        paper_summaries = format_for_level2(all_chunks, max_papers=15)
+        
+        prompt = LEVEL2_MEDIUM_PROMPT.format(
+            paper_summaries=paper_summaries,
+            count=count
+        )
+        
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        return self._parse_qa_response(content, Difficulty.MEDIUM, start_id)[:count]
+    
+    def _generate_level3_batch(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        clusters: list[PaperCluster],
+        count: int,
+        start_id: int
+    ) -> list[QAPair]:
+        """生成一批 Level 3 问题"""
+        if not clusters:
+            logger.warning("No clusters available for Level 3")
+            return []
+        
+        # 随机选择一个聚类
+        import random
+        cluster = random.choice(clusters)
+        cluster_papers = format_cluster_for_level3(cluster, all_chunks)
+        
+        prompt = LEVEL3_COMPARISON_PROMPT.format(
+            cluster_theme=cluster.theme,
+            cluster_papers=cluster_papers,
+            count=count
+        )
+        
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        pairs = self._parse_qa_response(content, Difficulty.HARD, start_id)[:count]
+        
+        # 标记为多论文问题
+        for p in pairs:
+            p.is_multi_paper = True
+        
         return pairs
     
-    # ==================== Level 1: Easy ====================
+    def _generate_level4_batch(
+        self,
+        all_chunks: dict[str, list[ChunkInfo]],
+        clusters: list[PaperCluster],
+        count: int,
+        start_id: int
+    ) -> list[QAPair]:
+        """生成一批 Level 4 问题"""
+        area_overview, paper_list = format_for_level4(all_chunks, clusters)
+        
+        prompt = LEVEL4_SURVEY_PROMPT.format(
+            area_overview=area_overview,
+            paper_list=paper_list,
+            count=count
+        )
+        
+        response = self.llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        pairs = self._parse_qa_response(content, Difficulty.EXPERT, start_id)[:count]
+        
+        # 标记为多论文问题
+        for p in pairs:
+            p.is_multi_paper = True
+        
+        return pairs
+    
+    # ==================== Level 1: Easy (保留旧接口) ====================
     
     def generate_level1_easy(
         self,
@@ -273,17 +407,7 @@ class QAGenerator:
         - 答案直接来自 abstract
         - 单论文检索即可回答
         """
-        paper_summaries = format_for_level1(all_chunks, max_papers=30)
-        
-        prompt = LEVEL1_EASY_PROMPT.format(
-            paper_summaries=paper_summaries,
-            count=count
-        )
-        
-        response = self.llm.invoke(prompt)
-        content = response.content if hasattr(response, 'content') else str(response)
-        
-        return self._parse_qa_response(content, Difficulty.EASY, start_id)[:count]
+        return self._generate_level1_batch(all_chunks, count, start_id)
     
     # ==================== Level 2: Medium ====================
     
@@ -301,17 +425,7 @@ class QAGenerator:
         - 答案来自 method/evaluation section
         - 问题不包含明显关键词
         """
-        paper_summaries = format_for_level2(all_chunks, max_papers=15)
-        
-        prompt = LEVEL2_MEDIUM_PROMPT.format(
-            paper_summaries=paper_summaries,
-            count=count
-        )
-        
-        response = self.llm.invoke(prompt)
-        content = response.content if hasattr(response, 'content') else str(response)
-        
-        return self._parse_qa_response(content, Difficulty.MEDIUM, start_id)[:count]
+        return self._generate_level2_batch(all_chunks, count, start_id)
     
     # ==================== Level 3: Hard (Comparison) ====================
     
@@ -449,6 +563,130 @@ class QAGenerator:
     
     # ==================== JSON 解析 ====================
     
+    def _fix_json_string(self, json_str: str) -> str:
+        """尝试修复常见的 JSON 格式错误"""
+        import re
+        
+        fixed = json_str
+        
+        # 1. 移除尾部逗号
+        fixed = re.sub(r',\s*}', '}', fixed)
+        fixed = re.sub(r',\s*\]', ']', fixed)
+        
+        # 2. 修复未转义的换行符（在字符串内部）
+        # 这是一个常见问题：LLM 在字符串值中包含了实际的换行符
+        def escape_newlines_in_strings(s: str) -> str:
+            result = []
+            in_string = False
+            escape_next = False
+            i = 0
+            while i < len(s):
+                c = s[i]
+                if escape_next:
+                    result.append(c)
+                    escape_next = False
+                elif c == '\\':
+                    result.append(c)
+                    escape_next = True
+                elif c == '"':
+                    result.append(c)
+                    in_string = not in_string
+                elif c == '\n' and in_string:
+                    result.append('\\n')
+                elif c == '\r' and in_string:
+                    result.append('\\r')
+                elif c == '\t' and in_string:
+                    result.append('\\t')
+                else:
+                    result.append(c)
+                i += 1
+            return ''.join(result)
+        
+        fixed = escape_newlines_in_strings(fixed)
+        
+        # 3. 修复控制字符
+        # 移除或转义 JSON 字符串中不允许的控制字符
+        def remove_control_chars(s: str) -> str:
+            # 保留换行、回车、制表符（已经在上面转义了）
+            # 移除其他控制字符
+            return ''.join(c if ord(c) >= 32 or c in '\n\r\t' else '' for c in s)
+        
+        fixed = remove_control_chars(fixed)
+        
+        return fixed
+    
+    def _extract_json_objects(self, content: str) -> list[dict]:
+        """
+        逐个提取 JSON 对象，使用平衡括号的方法
+        即使整体 JSON 数组无效也能工作
+        """
+        objects = []
+        i = 0
+        n = len(content)
+        
+        while i < n:
+            # 找到下一个 { 开始
+            if content[i] != '{':
+                i += 1
+                continue
+            
+            # 尝试找到匹配的 }
+            start = i
+            brace_count = 0
+            in_string = False
+            escape_next = False
+            j = i
+            
+            while j < n:
+                c = content[j]
+                
+                if escape_next:
+                    escape_next = False
+                    j += 1
+                    continue
+                
+                if c == '\\':
+                    escape_next = True
+                    j += 1
+                    continue
+                
+                if c == '"':
+                    in_string = not in_string
+                    j += 1
+                    continue
+                
+                if in_string:
+                    j += 1
+                    continue
+                
+                if c == '{':
+                    brace_count += 1
+                elif c == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        # 找到完整的对象
+                        obj_str = content[start:j+1]
+                        try:
+                            obj = json.loads(obj_str)
+                            if isinstance(obj, dict) and 'question' in obj:
+                                objects.append(obj)
+                        except json.JSONDecodeError:
+                            # 尝试修复
+                            try:
+                                fixed_obj = self._fix_json_string(obj_str)
+                                obj = json.loads(fixed_obj)
+                                if isinstance(obj, dict) and 'question' in obj:
+                                    objects.append(obj)
+                            except json.JSONDecodeError:
+                                pass
+                        break
+                
+                j += 1
+            
+            i = j + 1
+        
+        return objects
+    
     def _parse_qa_response(
         self, 
         content: str, 
@@ -467,6 +705,7 @@ class QAGenerator:
             return []
         
         json_str = json_match.group()
+        data = None
         
         # 尝试修复常见的 JSON 错误
         try:
@@ -474,20 +713,32 @@ class QAGenerator:
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parse error: {e}, attempting to fix...")
             
-            # 尝试修复: 移除尾部逗号
-            fixed_json = re.sub(r',\s*}', '}', json_str)
-            fixed_json = re.sub(r',\s*\]', ']', fixed_json)
-            
-            # 尝试修复: 替换单引号为双引号
-            fixed_json = fixed_json.replace("'", '"')
+            # 第一轮修复
+            fixed_json = self._fix_json_string(json_str)
             
             try:
                 data = json.loads(fixed_json)
-                logger.info("JSON fixed successfully")
+                logger.info("JSON fixed successfully (method 1)")
             except json.JSONDecodeError as e2:
-                logger.error(f"JSON fix failed: {e2}")
-                logger.debug(f"Problematic JSON: {json_str[:1000]}...")
-                return []
+                logger.warning(f"JSON fix method 1 failed: {e2}, trying fallback...")
+                
+                # 第二轮修复：逐个提取 JSON 对象
+                extracted_objects = self._extract_json_objects(json_str)
+                if extracted_objects:
+                    data = extracted_objects
+                    logger.info(f"JSON fixed via object extraction: got {len(data)} objects")
+                else:
+                    logger.error(f"All JSON fix methods failed")
+                    logger.debug(f"Problematic JSON (first 1000 chars): {json_str[:1000]}...")
+                    # 记录错误位置附近的内容以便调试
+                    if hasattr(e, 'pos') and e.pos:
+                        start = max(0, e.pos - 100)
+                        end = min(len(json_str), e.pos + 100)
+                        logger.debug(f"Context around error position {e.pos}: ...{json_str[start:end]}...")
+                    return []
+        
+        if data is None:
+            return []
         
         qa_pairs = []
         for i, item in enumerate(data):

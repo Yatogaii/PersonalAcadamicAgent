@@ -270,6 +270,7 @@ class EvaluationRunner:
         easy_scores = []
         medium_scores = []
         hard_scores = []
+        expert_scores = []
         all_correctness = []
         all_faithfulness = []
         all_relevance = []
@@ -309,6 +310,8 @@ class EvaluationRunner:
                 medium_scores.append(correctness)
             elif qa.difficulty == Difficulty.HARD:
                 hard_scores.append(correctness)
+            elif qa.difficulty == Difficulty.EXPERT:
+                expert_scores.append(correctness)
             
             logger.debug(f"QA {qa.id}: correctness={correctness:.2f}, "
                         f"faithfulness={faithfulness:.2f}, relevance={relevance:.2f}")
@@ -318,6 +321,7 @@ class EvaluationRunner:
             easy_accuracy=sum(easy_scores) / len(easy_scores) if easy_scores else 0,
             medium_accuracy=sum(medium_scores) / len(medium_scores) if medium_scores else 0,
             hard_accuracy=sum(hard_scores) / len(hard_scores) if hard_scores else 0,
+            expert_accuracy=sum(expert_scores) / len(expert_scores) if expert_scores else 0,
             overall_accuracy=sum(all_correctness) / len(all_correctness) if all_correctness else 0,
             answer_relevance=sum(all_relevance) / len(all_relevance) if all_relevance else 0,
             faithfulness=sum(all_faithfulness) / len(all_faithfulness) if all_faithfulness else 0,
@@ -510,6 +514,7 @@ class EvaluationRunner:
         print(f"  Easy Accuracy:   {l3.easy_accuracy:.4f}")
         print(f"  Medium Accuracy: {l3.medium_accuracy:.4f}")
         print(f"  Hard Accuracy:   {l3.hard_accuracy:.4f}")
+        print(f"  Expert Accuracy: {l3.expert_accuracy:.4f}")
         print(f"  Overall:         {l3.overall_accuracy:.4f}")
         print(f"  Faithfulness:    {l3.faithfulness:.4f}")
         
