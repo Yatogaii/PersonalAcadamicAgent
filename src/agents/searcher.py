@@ -1,4 +1,5 @@
 from typing import Any, Dict, List
+import json
 
 from logging_config import logger
 from rag.retriever import get_rag_client_by_provider
@@ -28,6 +29,309 @@ def _get_pdf_loader():
         else:
             _pdf_loader = PDFLoader(_get_rag_client())
     return _pdf_loader
+
+# Global LLM for agentic tools
+_agentic_llm = None
+
+def _get_agentic_llm():
+    global _agentic_llm
+    if _agentic_llm is None:
+        _agentic_llm = get_llm_by_usage('agentic')
+    return _agentic_llm
+
+
+# ============== Phase 1: Agentic Retrieval Tools ==============
+
+@tool
+def analyze_query(query: str) -> str:
+    """
+    [Phase 1] 分析用户查询，生成检索策略和多个子查询。
+    这是 Agentic Retrieval 的第一步，必须在检索前调用！
+    
+    Args:
+        query: 用户的原始查询
+    
+    Returns:
+        JSON格式的分析结果，包含：
+        - query_type: 查询类型（comparison/definition/survey/technical_detail）
+        - key_concepts: 关键概念列表
+        - sub_queries: 子查询列表（按优先级排序）
+        - estimated_complexity: 复杂度（high/medium/low）
+        - should_use_hyde: 是否应该使用 HyDE
+    """
+    llm = _get_agentic_llm()
+    
+    prompt = f"""You are a research query analyzer. Analyze the following user query and generate a retrieval strategy.
+
+User Query: "{query}"
+
+Your task:
+1. Identify the query type (comparison, definition, survey, technical_detail, or other)
+2. Extract key concepts and terminology
+3. Generate 2-4 sub-queries that progressively explore different aspects
+   - Start with broad/general queries
+   - Progress to specific/detailed queries
+4. Estimate query complexity (high/medium/low)
+5. Decide if HyDE (hypothetical document generation) would help
+
+Guidelines for sub-queries:
+- For comparisons: separate queries for each entity, then comparison
+- For surveys: broad overview first, then specific techniques/methods
+- For technical details: background first, then specific mechanisms
+- Each sub-query should be self-contained and searchable
+
+Respond ONLY with a valid JSON object (no markdown, no explanations):
+{{
+  "query_type": "comparison|definition|survey|technical_detail|other",
+  "key_concepts": ["concept1", "concept2"],
+  "sub_queries": ["query1", "query2", "query3"],
+  "estimated_complexity": "high|medium|low",
+  "should_use_hyde": true|false,
+  "reasoning": "brief explanation of strategy"
+}}"""
+    
+    try:
+        response = llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        # Extract JSON from response (handle markdown code blocks)
+        content = content.strip()
+        if content.startswith('```'):
+            # Remove markdown code block markers
+            lines = content.split('\n')
+            content = '\n'.join(lines[1:-1]) if len(lines) > 2 else content
+            content = content.replace('```json', '').replace('```', '').strip()
+        
+        # Validate JSON
+        analysis = json.loads(content)
+        
+        logger.info(f"Query analysis: {analysis.get('query_type')} | Complexity: {analysis.get('estimated_complexity')}")
+        logger.info(f"Generated {len(analysis.get('sub_queries', []))} sub-queries")
+        
+        return json.dumps(analysis, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Query analysis failed: {e}")
+        # Fallback: return simple analysis
+        fallback = {
+            "query_type": "other",
+            "key_concepts": [query],
+            "sub_queries": [query],
+            "estimated_complexity": "medium",
+            "should_use_hyde": False,
+            "reasoning": f"Analysis failed, using original query. Error: {str(e)}"
+        }
+        return json.dumps(fallback, ensure_ascii=False, indent=2)
+
+
+@tool
+def generate_hypothetical_answer(query: str) -> str:
+    """
+    [Optional - HyDE] 生成假想的理想答案文档，用于改善检索质量。
+    适用于抽象/高层次的查询。生成的文档会被用于向量检索。
+    
+    Args:
+        query: 子查询或原始查询
+    
+    Returns:
+        假想的答案文档文本（会被 embedding 后用于检索）
+    """
+    llm = _get_agentic_llm()
+    
+    prompt = f"""You are an expert researcher. Generate a hypothetical answer to the following query.
+
+Query: "{query}"
+
+Write a detailed, well-structured answer (2-3 paragraphs) as if you were writing an abstract or introduction section of a research paper that perfectly answers this query.
+
+Include:
+- Key technical terms and concepts
+- Relevant methodologies or approaches
+- Expected findings or conclusions
+- References to common techniques or frameworks
+
+Do NOT include citations like [1] or [2]. Just write the content.
+
+Your hypothetical answer:"""
+    
+    try:
+        response = llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        logger.info(f"Generated hypothetical document ({len(content)} chars)")
+        return content.strip()
+    except Exception as e:
+        logger.error(f"HyDE generation failed: {e}")
+        return query  # Fallback to original query
+
+
+@tool
+def evaluate_retrieval_progress(original_query: str, current_results_summary: str, round_number: int) -> str:
+    """
+    [Self-Reflection] 评估当前检索结果是否充分，决定是否需要继续检索。
+    
+    Args:
+        original_query: 用户的原始查询
+        current_results_summary: 当前已检索结果的摘要（论文标题列表）
+        round_number: 当前是第几轮检索（1-based）
+    
+    Returns:
+        JSON格式的评估结果，包含：
+        - is_sufficient: 是否已充分
+        - coverage_score: 覆盖度评分 (0.0-1.0)
+        - missing_aspects: 缺失的方面
+        - should_continue: 是否应该继续检索
+        - next_focus: 下一步应该关注什么
+    """
+    llm = _get_agentic_llm()
+    
+    prompt = f"""You are evaluating the sufficiency of retrieved research papers.
+
+Original Query: "{original_query}"
+
+Current Round: {round_number}
+
+Retrieved Papers So Far:
+{current_results_summary}
+
+Your task:
+1. Assess if the retrieved papers adequately cover the query
+2. Identify any missing aspects or gaps
+3. Decide if more retrieval rounds are needed
+4. If continuing, suggest what to focus on next
+
+Guidelines:
+- Round 1-2: Usually continue unless results are perfect
+- Round 3+: Only continue if critical information is missing
+- Max 4 rounds recommended to avoid diminishing returns
+
+Respond ONLY with a valid JSON object (no markdown, no explanations):
+{{
+  "is_sufficient": true|false,
+  "coverage_score": 0.0-1.0,
+  "missing_aspects": ["aspect1", "aspect2"],
+  "should_continue": true|false,
+  "next_focus": "description of what to search next",
+  "reasoning": "brief explanation"
+}}"""
+    
+    try:
+        response = llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        # Extract JSON
+        content = content.strip()
+        if content.startswith('```'):
+            lines = content.split('\n')
+            content = '\n'.join(lines[1:-1]) if len(lines) > 2 else content
+            content = content.replace('```json', '').replace('```', '').strip()
+        
+        evaluation = json.loads(content)
+        
+        logger.info(f"Evaluation - Round {round_number} | Sufficient: {evaluation.get('is_sufficient')} | Continue: {evaluation.get('should_continue')}")
+        
+        return json.dumps(evaluation, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Evaluation failed: {e}")
+        # Fallback: stop after round 3
+        fallback = {
+            "is_sufficient": round_number >= 3,
+            "coverage_score": 0.5,
+            "missing_aspects": [],
+            "should_continue": round_number < 3,
+            "next_focus": "Continue with remaining sub-queries",
+            "reasoning": f"Evaluation failed, using heuristic. Error: {str(e)}"
+        }
+        return json.dumps(fallback, ensure_ascii=False, indent=2)
+
+
+@tool
+def rerank_results(original_query: str, results_json: str) -> str:
+    """
+    [Final Step] 使用 LLM 对检索结果进行相关性评分和重排序。
+    
+    Args:
+        original_query: 用户的原始查询
+        results_json: 检索结果的 JSON 字符串（包含 title, abstract, doc_id）
+    
+    Returns:
+        重排序后的结果（JSON 格式），每个结果包含相关性分数
+    """
+    llm = _get_agentic_llm()
+    
+    try:
+        results = json.loads(results_json)
+    except:
+        return results_json  # Return as-is if parsing fails
+    
+    if not results:
+        return results_json
+    
+    # Prepare results for LLM
+    results_for_llm = []
+    for i, r in enumerate(results[:15], 1):  # Limit to top 15 for efficiency
+        results_for_llm.append({
+            "index": i,
+            "title": r.get("title", "Untitled"),
+            "abstract": r.get("abstract", "")[:400],  # Truncate for token efficiency
+            "doc_id": r.get("doc_id", "")
+        })
+    
+    prompt = f"""You are a research paper relevance evaluator. Rate the relevance of each paper to the query.
+
+Query: "{original_query}"
+
+Papers:
+{json.dumps(results_for_llm, ensure_ascii=False, indent=2)}
+
+Your task:
+For each paper, assign a relevance score from 0-10:
+- 9-10: Highly relevant, directly addresses the query
+- 7-8: Relevant, covers important aspects
+- 5-6: Somewhat relevant, tangentially related
+- 3-4: Marginally relevant
+- 0-2: Not relevant or off-topic
+
+Respond ONLY with a valid JSON array (no markdown, no explanations):
+[
+  {{"index": 1, "score": 8.5, "reason": "brief explanation"}},
+  {{"index": 2, "score": 7.0, "reason": "brief explanation"}},
+  ...
+]"""
+    
+    try:
+        response = llm.invoke(prompt)
+        content = response.content if hasattr(response, 'content') else str(response)
+        
+        # Extract JSON
+        content = content.strip()
+        if content.startswith('```'):
+            lines = content.split('\n')
+            content = '\n'.join(lines[1:-1]) if len(lines) > 2 else content
+            content = content.replace('```json', '').replace('```', '').strip()
+        
+        scores = json.loads(content)
+        
+        # Apply scores to results
+        score_map = {s["index"]: s["score"] for s in scores if "index" in s and "score" in s}
+        
+        for i, r in enumerate(results[:15], 1):
+            if i in score_map:
+                r["llm_relevance_score"] = score_map[i]
+            else:
+                r["llm_relevance_score"] = 5.0  # Default middle score
+        
+        # Sort by LLM score
+        reranked = sorted(results[:15], key=lambda x: x.get("llm_relevance_score", 0), reverse=True)
+        
+        # Filter out low scores (< 4.0)
+        reranked = [r for r in reranked if r.get("llm_relevance_score", 0) >= 4.0]
+        
+        logger.info(f"Reranked {len(reranked)} results (filtered from {len(results)})")
+        
+        return json.dumps(reranked, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Reranking failed: {e}")
+        return results_json  # Return original results
 
 
 # ============== Phase 2: Abstract Search ==============
@@ -239,8 +543,13 @@ class Searcher:
             self._setup_agent()
 
     def _setup_agent(self):
-        """Setup the LangChain agent with Lazy Load tools."""
+        """Setup the LangChain agent with Agentic Retrieval tools."""
         self.tools = [
+            # Phase 1: Agentic Retrieval
+            analyze_query,
+            generate_hypothetical_answer,
+            evaluate_retrieval_progress,
+            rerank_results,
             # Phase 2: Abstract search
             search_abstracts,
             # Phase 3: Lazy load PDF
