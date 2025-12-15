@@ -651,7 +651,7 @@ class Searcher:
         ]
         
         try:
-            result = agent.invoke({"messages": msgs})
+            result = agent.invoke({"messages": msgs}, config={"recursion_limit": 100})
             messages = result.get("messages", [])
             # Get the last AI message as the answer
             answer = ""

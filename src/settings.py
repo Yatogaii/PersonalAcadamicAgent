@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     HTTP_PROXY: Optional[str] = None
     HTTPS_PROXY: Optional[str] = None
 
-    enable_agentic_rag: bool = False
+    enable_agentic_rag: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",
