@@ -38,5 +38,7 @@ def workflow(user_input:str):
 
 
 if __name__ == "__main__":
-    user_input = 'Get accepted paper in USENIX Security 2025'
+    #user_input = 'Get accepted paper in USENIX Security 2020-2024'
+    #user_input = "What's going on with FUZZ research recently? Summarize key papers with citations."
+    user_input=input()
     workflow(user_input)
