@@ -1,62 +1,250 @@
-# 架构
-```mermaid
-flowchart LR
-  Coordinator[Coordinator]
-  UC[User Clarification]
-  Collector[Collector Agent]
-  HTMLParse[HTML Parse Agent]
-  Summary[Summary Agent]
-  Search[Search Agent]
-  Milvus[(Milvus)]
-  Return((Summary Agent))
+# Academic Paper RAG System with Multi-Agent Architecture
 
-  Coordinator --> UC --> Summary --> Coordinator
-  Coordinator --> Collector --> HTMLParse --> Milvus --> Return
-  Coordinator --> Search --> Milvus --> Return
+## Overview
+A production-ready system that combines **multi-agent orchestration** with **structure-aware agentic RAG** for academic paper collection, indexing, and semantic search.
+
+## System Architecture
+
+### 1. Multi-Agent Orchestration
+```mermaid
+graph TD
+    User["User Query"]
+    Coordinator["🎯 Coordinator Agent"]
+    Clarifier["Clarification Agent"]
+    Collector["📰 Paper Collector Agent"]
+    HTMLParser["🔍 HTML Parser Agent"]
+    Searcher["🔎 Agentic Searcher"]
+    
+    User -->|Input| Coordinator
+    Coordinator -->|Needs Clarification| Clarifier
+    Clarifier -->|Refined Query| Coordinator
+    Coordinator -->|Collect Papers| Collector
+    Collector -->|Parse HTML Structure| HTMLParser
+    HTMLParser -->|Extract Papers| Collector
+    Coordinator -->|Search Papers| Searcher
+    Searcher -->|Results + Citations| Coordinator
+    Coordinator -->|Final Answer| User
 ```
 
+**Coordinator Agent** acts as the brain of the system:
+- Intelligently routes user queries to appropriate agents
+- Manages multi-round clarification for ambiguous requests
+- Aggregates results and generates comprehensive answers with citations
 
+### 2. Agentic RAG Architecture (3-Phase Retrieval Pipeline)
+```mermaid
+graph LR
+    A["Phase 1: Query Analysis"] -->|Sub-queries + Strategy| B["Phase 2: Multi-scope Retrieval"]
+    B -->|Retrieved Chunks| C["Phase 3: Context Reconstruction"]
+    C -->|Final Answer| D["User"]
+    
+    subgraph Phase1["🎯 Phase 1: Query Understanding"]
+        A1["analyze_query"]
+        A2["Extract: query_type, concepts, sub_queries"]
+        A1 --> A2
+    end
+    
+    subgraph Phase2["🔍 Phase 2: Intelligent Retrieval"]
+        B1["search_abstracts"]
+        B2["load_paper_pdfs - Lazy Load"]
+        B3["search_paper_content - Scoped"]
+        B1 -->|Top Papers| B2
+        B2 -->|PDF Indexed| B3
+    end
+    
+    subgraph Phase3["📖 Phase 3: Context Assembly"]
+        C1["get_context_window"]
+        C2["get_paper_introduction"]
+        C3["Final Synthesis"]
+        C1 --> C3
+        C2 --> C3
+    end
+    
+    A --> Phase1
+    Phase1 --> B
+    B --> Phase2
+    Phase2 --> C
+    Phase3 --> C
+```
 
-论文下载&检索 Agent，效果为：用户输入一个会议名称，他负责帮我分析该会议的HTML结构，并且解析相应年份的 accepetd_papers，然后写爬虫去下载这会议该年份的所有论文，并且翻译摘要。
-检索：用户输入一个关键字，使用 Embedding 在数据库中搜索。
+**Key Innovation: Lazy Loading Pattern**
+- Search abstracts first (lightweight, instant)
+- Only load PDF chunks for selected papers (on-demand)
+- Reconstruct context from section-aware structure
 
-# PRD
+### 3. Data Flow: Collection to Indexing
+```mermaid
+graph LR
+    Web["Web Pages"]
+    Collector["Collector Agent"]
+    Parser["PDF Parser<br/>Structure-Aware"]
+    Chunker["Chunker<br/>Sentence-Merge + Context"]
+    RAG["Milvus Vector DB<br/>Structure-Indexed"]
+    
+    Web -->|HTML Scraping| Collector
+    Collector -->|PDF Download| Parser
+    Parser -->|Section Tree| Parser
+    Parser -->|Flat Chunks| Chunker
+    Chunker -->|ChunkResult<br/>+ Metadata| RAG
+    
+    style RAG fill:#e1f5ff
+    style Parser fill:#fff3e0
+    style Chunker fill:#f3e5f5
+```
 
-## Workflow
-1. 用户输入一个会议名称以及年份，想要获取对应的所有 accepetd_papers。
+## Core Components
 
+### Agent Layer (`src/agents/`)
+- **coordinator.py**: LangChain-based agent orchestrator
+  - Uses tools: `handoff_to_collector()`, `handoff_to_RAG()`
+  - Dynamic routing based on query intent
+  
+- **collector.py**: Web scraping + paper collection
+  - HTML structure learning via LLM
+  - PDF downloading with retry logic
+  
+- **searcher.py**: Agentic RAG implementation
+  - Phase 1: Query analysis & decomposition
+  - Phase 2: Multi-scope retrieval (abstract → PDF chunks)
+  - Phase 3: Context reconstruction with window context
+  
+- **html_parse_agent.py**: LLM-based HTML selector generation
 
-## Tool 方面：
-1. 首先需要一个网络搜索器，用于搜索会议相关信息。
-2. 还需要一个 request 库，因为需要获取指定会议的 HTML 结构。
-3. 同时这个 requests 库还得有下载 PDF 的功能。
-4. 解析器操作，Agent 在操作解析器前，需要判断一个解析器是否存在。
+### RAG Layer (`src/rag/`)
 
-所以当前可以定义出来如下的 TOOL:
-1. `web_search`: 输入一个 TOPIC，调用 request 库，搜索 google。
-2. `get_topic_url`：输入一个话题，获取这个话题的 URL，比如 USENIX 2025 Cycle 1 Accepted Paper 的 URL 为：https://www.usenix.org/conf%C3%A9rence/usenixsecurity25/cycle1-accepted-papers （对于有多轮审稿的会议，可能有多个返回值）
-3. `get_html_content`: 输入一个 URL，获取 HTML 并返回。
-4. `download_pdf`：输入 PDF 的 URL，下载并保存在预设路径内。
-5. `get_parser`：输入对应网站的特征（比如 USENIX 会议的 index 页），获取它对应的解析器（主要是 BeautifulSoup），如果解析器不存在就调用 CodeAgent 写一个出来（包括测试）。
+#### PDF Parser (`pdf_parser.py`)
+- **Outline-aware parsing**: Uses PDF outline/TOC for structure
+- **Section classification**: 7 categories (Abstract, Intro, Method, Results, Related Work, Conclusion, Other)
+- **Hierarchical representation**: Preserves section nesting for context-aware retrieval
 
+#### Chunker (`chunker.py`)
+Two strategies with unified preprocessing:
+```
+Strategy: Paragraph (lightweight)
+├─ Sentence-Merge preprocessing
+│  ├─ Split long paragraphs by sentence boundaries
+│  ├─ Merge adjacent sentences to target size
+│  └─ Preserve section-level overlap
+└─ Keep structure metadata
 
-Agent 方面，要有：
-1. 一个收集信息的 Agent，调用网络搜索等工具。
-2. 一个写代码 Agent，负责写 python 代码，并且执行，并且需要 debug，因此需要如下几个tool:
-   1. 文件编辑tool，包括替换哪些行，创建新文件等。
-   2. 代码执行 tool，用于验证写好的代码。
+Strategy: Contextual (high-quality)
+├─ Sentence-Merge preprocessing
+├─ LLM generates "contextual prefix" for each chunk
+│  (e.g., "In Section 3.2 about Threat Models...")
+└─ Prefix + chunk text = better semantic understanding
+```
 
+#### Lazy Loading (`pdf_loader.py`)
+```python
+# Only download/parse PDFs for selected papers
+loader = PDFLoader(rag_client)
+results = loader.load_papers(["doc_id_1", "doc_id_2"])
 
-信息检索方面，需要使用一个 RAG，做 Embedding。
+# Checks:
+# 1. Is it already indexed? (skip)
+# 2. Metadata available? (get PDF URL)
+# 3. Download + parse with structure
+# 4. Invoke callback for evaluation tracking
+```
 
-# Evaluation
-1. 评估写代码 Agent 与收集信息 Agent 如果合并的话会有什么效果。
-2. 评估 RAG 不同 分词器，Embedding, Split, Search 的差异。（这是一个学习 RAG 相关知识的好机会）。
-3. 评估多 Agent 中，不同 Agent 之间是怎么协作的。（三种协助机制：主从-Hierarchical、LECL-Sequential、评论家-写作家-主持人-Collaborative）
-4. 在 3 的情况中，tool-use 有超时机制吗，怎么实现的？
+#### Milvus Vector DB (`milvus.py`)
+**Unified schema** (papers + chunks):
+- `doc_id`: Paper identifier
+- `chunk_id`: Sequential chunk index (-1 = paper record, ≥0 = chunk record)
+- `vector`: Embedding (OpenAI/HuggingFace)
+- `section_category`: Structural metadata (Abstract=0, Intro=1, Method=2, etc.)
+- `parent_section`: Hierarchical relationship
+- `page_number`: Source location
 
-# Progress
+**Structure-aware methods**:
+```python
+search_abstracts(query)           # Find relevant papers
+search_by_section(query, doc_id)  # Scoped search in specific paper
+get_context_window(doc_id, idx)   # Get surrounding chunks
+get_paper_introduction(doc_id)    # Background context
+```
 
-## 20251030
-实现一个 Coding Agent 非常困难，实现它的难度已经要远远高于实现一个论文管理Agent了。
-因此我们使用免费的Gemini-flash-lite-latest来做我们的HTML总结Agent，输入 HTML 给他，他输出一个 json 列表。
+## Technology Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **LLM & Agents** | LangChain (v1.0), Kimi-K2, DeepSeek API |
+| **Embeddings** | OpenAI, HuggingFace Sentence Transformers |
+| **Vector DB** | Milvus Lite / Milvus Cloud |
+| **PDF Processing** | PyMuPDF, pdfplumber, PyPDF |
+| **Web Scraping** | BeautifulSoup4, DuckDuckGo Search |
+| **Framework** | Python 3.13+, Pydantic v2 |
+
+## Key Design Decisions
+
+1. **Multi-Agent over Monolithic**: Each agent owns a domain (collection, parsing, search)
+   - Easy to test and modify individual agents
+   - Supports future task specialization
+   
+2. **Structure-Aware RAG**: Preserve PDF section hierarchy
+   - Better context reconstruction
+   - Scoped search within specific papers
+   - Support for "compare sections across papers" queries
+   
+3. **Lazy Loading Pattern**: PDF chunks on-demand
+   - Reduce database size for abstract-only searches
+   - Fast initial retrieval
+   - Resource-efficient for large paper collections
+
+4. **Agentic Phases**: Explicit retrieval strategy
+   - Phase 1: Understand query intent → generate sub-queries
+   - Phase 2: Retrieve relevant papers → optionally load PDFs
+   - Phase 3: Reconstruct context with background
+   - Interpretable and debuggable pipeline
+
+## Usage Example
+
+```python
+from main import workflow
+
+# Natural language query
+user_input = "What are the latest fuzzing techniques in USENIX Security 2023-2024?"
+result = workflow(user_input)
+
+# System flow:
+# 1. Coordinator analyzes query → Needs RAG search
+# 2. Searcher Phase 1: Query → ["fuzzing", "bug finding", "vulnerability detection"]
+# 3. Searcher Phase 2: search_abstracts() → [paper_1, paper_2, paper_3]
+# 4. Searcher Phase 2: load_paper_pdfs([paper_1, paper_2]) → chunks indexed
+# 5. Searcher Phase 2: search_paper_content() → relevant sections
+# 6. Searcher Phase 3: get_context_window() + get_paper_introduction()
+# 7. Final answer with citations to sections/pages
+```
+
+## Advantages & Highlights
+
+✅ **Production-Ready**
+- Error handling & retry logic (PDF download, API calls)
+- Structured logging throughout
+- Configurable via settings.py (LLM models, embedding, DB endpoints)
+
+✅ **Interpretable & Debuggable**
+- Explicit phase-based retrieval
+- Tool invocation history in agent output
+- Chunk metadata (section, page, hierarchy) for traceability
+
+✅ **Extensible**
+- Abstract RAG base class → support multiple vector DBs
+- Pluggable chunking strategies (paragraph, contextual, future custom)
+- HTML parser agent learns page structure automatically
+
+✅ **Scalable**
+- Milvus supports both lite (local) and cloud deployment
+- Lazy loading reduces memory footprint
+- Evaluation pipeline for chunking strategy comparison
+
+## Evaluation Framework
+`src/evaluation/` includes:
+- **Data preparation**: Convert papers to different chunking strategies
+- **QA generation**: Create evaluation datasets
+- **Pipeline runner**: Compare retrieval quality across strategies
+- Ground truth annotation for metric computation
+
+---
+
+**For questions or details**: Refer to `/docs/` for architecture deep-dives (lazy loading design, structure-aware RAG plan).
