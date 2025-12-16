@@ -8,6 +8,7 @@ so we only need to generate the selectors once for each conference.
 
 from parser.HTMLSelector import HTMLSelector
 
+import copy
 import os
 import json
 import uuid
@@ -15,7 +16,7 @@ import traceback
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Dict, Iterable, List, Tuple, cast
 from langchain.agents import create_agent
 import requests
 from langchain.tools import tool
@@ -141,6 +142,71 @@ def _langchain_messages_to_openai(messages):
         out.append({'role': 'assistant', 'content': str(content)})
 
     return out
+
+
+def _extract_tool_step_info(step: Any) -> Tuple[str, str]:
+    """Return (tool_name, observation_text) for a LangChain intermediate step."""
+
+    action = None
+    observation: Any = ""
+
+    if isinstance(step, (list, tuple)):
+        if step:
+            action = step[0]
+        if len(step) >= 2:
+            observation = step[1]
+    elif isinstance(step, dict):
+        action = step.get('action')
+        observation = step.get('observation', "")
+    else:
+        action = getattr(step, 'action', None)
+        observation = getattr(step, 'observation', "")
+
+    if isinstance(action, dict):
+        tool_name = action.get('tool') or action.get('name') or ""
+    else:
+        tool_name = (
+            getattr(action, 'tool', None)
+            or getattr(action, 'tool_name', None)
+            or getattr(action, 'name', None)
+            or ""
+        )
+
+    return str(tool_name or ""), str(observation or "")
+
+
+def _augment_messages_with_intermediate_steps(messages: List[Dict[str, Any]], intermediate_steps: Iterable[Any]):
+    """Inject tool response messages when LangChain omits them."""
+
+    intermediate_steps = list(intermediate_steps or [])
+    if not intermediate_steps:
+        return messages
+    if any(m.get('role') == 'tool' for m in messages):
+        return messages
+
+    augmented: List[Dict[str, Any]] = []
+    steps_iter = iter(intermediate_steps)
+
+    for msg in messages:
+        msg_copy = copy.deepcopy(msg)
+        augmented.append(msg_copy)
+
+        if msg_copy.get('role') == 'assistant' and msg_copy.get('tool_calls'):
+            for tool_call in msg_copy.get('tool_calls', []):
+                step = next(steps_iter, None)
+                if step is None:
+                    break
+                tool_name, observation = _extract_tool_step_info(step)
+                augmented.append(
+                    {
+                        'role': 'tool',
+                        'tool_call_id': tool_call.get('id'),
+                        'name': tool_name or tool_call.get('function', {}).get('name') or 'tool',
+                        'content': observation,
+                    }
+                )
+
+    return augmented
 
 @tool
 def bash_exec(cmd:str) -> str:
@@ -285,11 +351,8 @@ def get_html_selector_by_llm(url: str, selector_target: str | None = None) -> st
         if selector_target is None:
             selector_target = os.environ.get("SELECTOR_TARGET")
         if not selector_target:
-            u = (url or "").lower()
-            if any(k in u for k in ["accepted", "papers", "proceedings", "conference"]):
-                selector_target = "list"
-            else:
-                selector_target = "page"
+            selector_target = "list"
+
 
         # Apply prompt template (parameterized)
         msgs = apply_prompt_template("html_parse_agent", {"selector_target": selector_target})
@@ -317,11 +380,13 @@ def get_html_selector_by_llm(url: str, selector_target: str | None = None) -> st
             input={"messages": msgs},
             config={"recursion_limit": 100}
         )
-        
+        lc_messages = list(res.get("messages", []))
+        intermediate_steps = res.get("intermediate_steps") or []
+
         # Extract tool calls from messages
         step_idx = 0
         last_tool_record = None
-        for msg in res.get("messages", []):
+        for msg in lc_messages:
             # Try to extract tool calls from message
             if hasattr(msg, 'tool_calls') and msg.tool_calls:
                 for tool_call in msg.tool_calls:
@@ -342,15 +407,27 @@ def get_html_selector_by_llm(url: str, selector_target: str | None = None) -> st
                     output = getattr(msg, 'content', '')
                     last_tool_record["tool_output"] = truncate_text(output, max_chars=4000)
                     last_tool_record["tool_output_len"] = len(str(output))
+
+        if trace_data["tool_calls"] and intermediate_steps:
+            for tool_record, step in zip(trace_data["tool_calls"], intermediate_steps):
+                if tool_record.get("tool_output"):
+                    continue
+                _, observation = _extract_tool_step_info(step)
+                observation_str = str(observation or "")
+                if observation_str:
+                    tool_record["tool_output"] = truncate_text(observation_str, max_chars=4000)
+                    tool_record["tool_output_len"] = len(observation_str)
         
         # Serialize messages (truncate content)
-        for msg in res.get("messages", []):
+        for msg in lc_messages:
             msg_dict = safe_serialize(msg)
             trace_data["messages"].append(msg_dict)
         
         # Extract final selector JSON
+        if not lc_messages:
+            raise ValueError("Agent returned no messages.")
         final_content = extract_text_from_message_content(
-            getattr(res["messages"][-1], "content", res["messages"][-1])
+            getattr(lc_messages[-1], "content", lc_messages[-1])
         )
 
         original_question = (
@@ -413,7 +490,9 @@ def get_html_selector_by_llm(url: str, selector_target: str | None = None) -> st
                         system_prompt_used = m.get('content', '')
                         break
                 collector = TrajectoryCollector(system_prompt=system_prompt_used)
-                collector.current_trace = _langchain_messages_to_openai(res.get('messages', []))
+                openai_messages = _langchain_messages_to_openai(lc_messages)
+                openai_messages = _augment_messages_with_intermediate_steps(openai_messages, intermediate_steps)
+                collector.current_trace = openai_messages
                 collector.save_for_grpo(
                     original_question=original_question,
                     final_selector=(selector_dict if selector_dict is not None else final_selector_str),
@@ -439,3 +518,14 @@ def get_html_selector_by_llm(url: str, selector_target: str | None = None) -> st
         
         # Re-raise the exception
         raise
+
+
+def get_parser_by_llm(url: str, selector_target: str | None = None) -> str:
+    """Wrapper to keep backward compatibility with CLI helpers.
+
+    The GRPO collection scripts expect a `get_parser_by_llm` entry point, so we
+    simply forward to ``get_html_selector_by_llm`` to avoid duplicating agent
+    creation logic.
+    """
+
+    return get_html_selector_by_llm(url, selector_target=selector_target)
