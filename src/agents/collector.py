@@ -11,7 +11,7 @@ from langchain.tools import tool
 from langchain.agents import create_agent
 from ddgs import DDGS
 import json
-from typing import List
+from typing import List, Optional
 
 from pathlib import Path
 import os
@@ -39,7 +39,7 @@ def get_existing_rounds_from_db(conference: str, year: int) -> List[str]:
     return rounds
 
 @tool
-def get_parsed_html(url: str, conference: str, year: int, round: str) -> str:
+def get_parsed_html(url: str, conference: str, year: int, round: str, selector_target: Optional[str] = None) -> str:
     '''
     Parse a webpage, save the parsed content JSON, and return the absolute path.
     Checks if the conference data already exists in the DB before parsing.
@@ -70,7 +70,8 @@ def get_parsed_html(url: str, conference: str, year: int, round: str) -> str:
         logger.success(f"Cached parsed HTML content for URL: {url}, conference name:{conference}")
         return str(file_path.resolve())
 
-    selectors_obj = get_or_write_html_selector(url, filename_base)
+    # Default: list pages for paper collection
+    selectors_obj = get_or_write_html_selector(url, filename_base, selector_target=selector_target or "list")
     selectors_json = selectors_obj.model_dump_json()
     parsed_content = get_parsed_content_by_selector(url, selectors_json)
     if parsed_content == "":
@@ -129,7 +130,7 @@ def enrich_papers_with_details(json_path: str, conference: str) -> str:
             
         if not detail_selector:
             try:
-                detail_selector = get_or_write_html_selector(detail_url, conference, "detail")
+                detail_selector = get_or_write_html_selector(detail_url, conference, "detail", selector_target="detail")
             except Exception as e:
                 logger.error(f"Failed to get detail selector: {e}")
                 continue
@@ -171,7 +172,12 @@ def report_progress(message: str) -> str:
     logger.success(f"[CollectorProgress] {message}")
     return message
     
-def get_or_write_html_selector(url: str, conference: str, selector_suffix: str = "") -> HTMLSelector:
+def get_or_write_html_selector(
+    url: str,
+    conference: str,
+    selector_suffix: str = "",
+    selector_target: Optional[str] = None,
+) -> HTMLSelector:
     '''
     Parse the html and extract all the text inside specific tags.
     Tags file always in "html_selectors/{conference}.json".
@@ -185,6 +191,10 @@ def get_or_write_html_selector(url: str, conference: str, selector_suffix: str =
     selector_name = conference.split('_')[0]
     if selector_suffix:
         selector_name = f"{selector_name}_{selector_suffix}"
+
+    # Infer target if not provided
+    if not selector_target:
+        selector_target = "detail" if selector_suffix else "list"
     
     HTML_SELECTORS_DIR.mkdir(parents=True, exist_ok=True)
     selector_file = HTML_SELECTORS_DIR / f"{selector_name}.json"
@@ -200,7 +210,7 @@ def get_or_write_html_selector(url: str, conference: str, selector_suffix: str =
             exit(0)
     else:
         logger.info(f"Generating selectors for conference: {selector_name}")
-        selectors = get_html_selector_by_llm(url)
+        selectors = get_html_selector_by_llm(url, selector_target=selector_target)
 
         if not selectors:
             logger.error(f"Failed to get selectors for URL: {url}")
