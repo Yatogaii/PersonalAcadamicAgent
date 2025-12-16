@@ -5,8 +5,10 @@ __pycache__
 
 htmls/*
 
-./evaluation/
+evaluation/data/
 saved_html_content/
 tests/
+data/
+logs/
 
 .vscode
