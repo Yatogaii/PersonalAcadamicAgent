@@ -10,5 +10,7 @@ saved_html_content/
 tests/
 data/
 logs/
+saved_content/
+examples/
 
 .vscode
