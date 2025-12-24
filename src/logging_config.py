@@ -13,6 +13,9 @@ LOG_FORMAT = (
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
     "<level>{message}</level>"
 )
+PLAIN_LOG_FORMAT = (
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
+)
 
 
 if _loguru_logger is not None:
@@ -35,14 +38,19 @@ if _loguru_logger is not None:
 
             logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
-    def setup_logging(level: str = "INFO") -> None:
-        """Initialize loguru with stdout sink and intercept stdlib logging."""
+    def setup_logging(
+        level: str = "INFO",
+        sink=None,
+        log_format: str = LOG_FORMAT,
+        enqueue: bool = True,
+    ) -> None:
+        """Initialize loguru with a configurable sink and intercept stdlib logging."""
         logger.remove()
         logger.add(
-            sys.stdout,
+            sink or sys.stdout,
             level=level,
-            format=LOG_FORMAT,
-            enqueue=True,
+            format=log_format,
+            enqueue=enqueue,
             backtrace=False,
             diagnose=False,
         )
@@ -53,15 +61,32 @@ else:
     logger = logging.getLogger("paper_collector")
     logger.propagate = False
 
-    def setup_logging(level: str = "INFO") -> None:
+    def setup_logging(
+        level: str = "INFO",
+        sink=None,
+        log_format: str | None = None,
+        enqueue: bool = True,  # kept for signature parity
+    ) -> None:
         """Fallback: standard logging to stdout when loguru is unavailable."""
 
         numeric_level = getattr(logging, level.upper(), logging.INFO)
         logger.setLevel(numeric_level)
 
-        handler = logging.StreamHandler(sys.stdout)
+        if sink is None:
+            handler = logging.StreamHandler(sys.stdout)
+        elif hasattr(sink, "write"):
+            handler = logging.StreamHandler(sink)
+        else:
+            class _FuncHandler(logging.Handler):
+                def emit(self, record: logging.LogRecord) -> None:
+                    msg = self.format(record)
+                    sink(msg)
+
+            handler = _FuncHandler()
+
         formatter = logging.Formatter(
-            "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s"
+            log_format
+            or "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s"
         )
         handler.setFormatter(formatter)
 
@@ -73,4 +98,4 @@ else:
 
 setup_logging()
 
-__all__ = ["logger", "setup_logging"]
+__all__ = ["logger", "setup_logging", "PLAIN_LOG_FORMAT"]
