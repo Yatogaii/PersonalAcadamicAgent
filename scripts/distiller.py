@@ -6,12 +6,13 @@ import subprocess
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import os
 
 # 假设你使用 OpenAI 格式的 API (可以是 GPT-4o 或 DeepSeek)
 from openai import OpenAI
 
 # 配置你的 API
-client = OpenAI(api_key="sk-3c75accf241e412daa7257518e0255fe", base_url="https://api.deepseek.com/v1")
+client = OpenAI(api_key=os.getenv("DS_KEY", ""), base_url="https://api.deepseek.com/v1")
 
 SYSTEM_PROMPT = """You MUST follow these rules strictly:
 1) Before calling any tool / function, you MUST output a <thought>...</thought> block FIRST.
