@@ -59,10 +59,7 @@ def analyze_query(query: str) -> str:
         - estimated_complexity: 复杂度（high/medium/low）
         - should_use_hyde: 是否应该使用 HyDE
     """
-    logger.info("="*80)
-    logger.info("🎯 [PHASE 1: QUERY ANALYSIS] Starting query analysis...")
-    logger.info(f"📝 Original Query: {query}")
-    logger.info("="*80)
+    logger.info(f"Analyzing query: {query}")
     
     llm = _get_agentic_llm()
     
@@ -110,20 +107,19 @@ Respond ONLY with a valid JSON object (no markdown, no explanations):
         # Validate JSON
         analysis = json.loads(content)
         
-        logger.success("✅ Query analysis completed successfully!")
-        logger.info(f"   📊 Query Type: {analysis.get('query_type')}")
-        logger.info(f"   🔥 Complexity: {analysis.get('estimated_complexity')}")
-        logger.info(f"   🔑 Key Concepts: {', '.join(analysis.get('key_concepts', []))}")
-        logger.info(f"   📋 Generated {len(analysis.get('sub_queries', []))} sub-queries:")
-        for i, sq in enumerate(analysis.get('sub_queries', []), 1):
-            logger.info(f"      {i}. {sq}")
-        logger.info(f"   🚀 Use HyDE: {analysis.get('should_use_hyde')}")
-        logger.info(f"   💡 Reasoning: {analysis.get('reasoning', 'N/A')}")
-        logger.info("="*80)
+        logger.info(
+            "Query analysis done: type=%s complexity=%s sub_queries=%d hyde=%s"
+            % (
+                analysis.get("query_type"),
+                analysis.get("estimated_complexity"),
+                len(analysis.get("sub_queries", [])),
+                analysis.get("should_use_hyde"),
+            )
+        )
         
         return json.dumps(analysis, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.error(f"❌ Query analysis failed: {e}")
+        logger.error(f"Query analysis failed: {e}")
         # Fallback: return simple analysis
         fallback = {
             "query_type": "other",
@@ -148,10 +144,7 @@ def generate_hypothetical_answer(query: str) -> str:
     Returns:
         假想的答案文档文本（会被 embedding 后用于检索）
     """
-    logger.info("="*80)
-    logger.info("🔮 [HyDE] Generating hypothetical answer document...")
-    logger.info(f"📝 Query: {query}")
-    logger.info("="*80)
+    logger.info(f"Generating hypothetical answer for: {query}")
     
     llm = _get_agentic_llm()
     
@@ -175,13 +168,11 @@ Your hypothetical answer:"""
         response = llm.invoke(prompt)
         content = response.content if hasattr(response, 'content') else str(response)
         
-        logger.success(f"✅ Generated hypothetical document ({len(content)} chars)")
-        logger.info(f"📄 Preview: {content[:200]}...")
-        logger.info("="*80)
+        logger.info(f"Generated hypothetical document ({len(content)} chars)")
         return content.strip()
     except Exception as e:
-        logger.error(f"❌ HyDE generation failed: {e}")
-        logger.warning("⚠️  Falling back to original query")
+        logger.error(f"HyDE generation failed: {e}")
+        logger.warning("Falling back to original query")
         return query  # Fallback to original query
 
 
@@ -203,12 +194,7 @@ def evaluate_retrieval_progress(original_query: str, current_results_summary: st
         - should_continue: 是否应该继续检索
         - next_focus: 下一步应该关注什么
     """
-    logger.info("="*80)
-    logger.info(f"🔍 [SELF-REFLECTION] Evaluating retrieval progress - Round {round_number}")
-    logger.info(f"📝 Original Query: {original_query}")
-    logger.info(f"📊 Current Results Summary:")
-    logger.info(current_results_summary[:500] + "..." if len(current_results_summary) > 500 else current_results_summary)
-    logger.info("="*80)
+    logger.info(f"Evaluating retrieval progress (round {round_number})")
     
     llm = _get_agentic_llm()
     
@@ -255,20 +241,22 @@ Respond ONLY with a valid JSON object (no markdown, no explanations):
         
         evaluation = json.loads(content)
         
-        logger.success(f"✅ Evaluation completed - Round {round_number}")
-        logger.info(f"   📊 Coverage Score: {evaluation.get('coverage_score'):.2f}/1.0")
-        logger.info(f"   ✔️  Is Sufficient: {evaluation.get('is_sufficient')}")
-        logger.info(f"   ➡️  Should Continue: {evaluation.get('should_continue')}")
-        if evaluation.get('missing_aspects'):
-            logger.warning(f"   ⚠️  Missing Aspects: {', '.join(evaluation.get('missing_aspects', []))}")
-        if evaluation.get('next_focus'):
-            logger.info(f"   🎯 Next Focus: {evaluation.get('next_focus')}")
-        logger.info(f"   💭 Reasoning: {evaluation.get('reasoning', 'N/A')}")
-        logger.info("="*80)
+        logger.info(
+            "Evaluation done: coverage=%.2f sufficient=%s continue=%s"
+            % (
+                evaluation.get("coverage_score", 0.0),
+                evaluation.get("is_sufficient"),
+                evaluation.get("should_continue"),
+            )
+        )
+        if evaluation.get("missing_aspects"):
+            logger.info(f"Missing aspects: {', '.join(evaluation.get('missing_aspects', []))}")
+        if evaluation.get("next_focus"):
+            logger.info(f"Next focus: {evaluation.get('next_focus')}")
         
         return json.dumps(evaluation, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.error(f"❌ Evaluation failed: {e}")
+        logger.error(f"Evaluation failed: {e}")
         # Fallback: stop after round 3
         fallback = {
             "is_sufficient": round_number >= 3,
@@ -293,24 +281,21 @@ def rerank_results(original_query: str, results_json: str) -> str:
     Returns:
         重排序后的结果（JSON 格式），每个结果包含相关性分数
     """
-    logger.info("="*80)
-    logger.info("🏆 [PHASE 3: RERANKING] Starting LLM-based reranking...")
-    logger.info(f"📝 Query: {original_query}")
+    logger.info(f"Reranking results for query: {original_query}")
     
     llm = _get_agentic_llm()
     
     try:
         results = json.loads(results_json)
     except:
-        logger.error("❌ Failed to parse results JSON")
+        logger.error("Failed to parse results JSON")
         return results_json  # Return as-is if parsing fails
     
     if not results:
-        logger.warning("⚠️  No results to rerank")
+        logger.warning("No results to rerank")
         return results_json
     
-    logger.info(f"📊 Input: {len(results)} papers to rerank")
-    logger.info("="*80)
+    logger.info(f"Reranking {len(results)} papers")
     
     # Prepare results for LLM
     results_for_llm = []
@@ -372,19 +357,12 @@ Respond ONLY with a valid JSON array (no markdown, no explanations):
         # Filter out low scores (< 4.0)
         reranked = [r for r in reranked if r.get("llm_relevance_score", 0) >= 4.0]
         
-        logger.success(f"✅ Reranking completed!")
-        logger.info(f"   📊 Final Results: {len(reranked)} papers (filtered from {len(results)})")
-        logger.info(f"   🏆 Top 5 Papers by Relevance:")
-        for i, r in enumerate(reranked[:5], 1):
-            score = r.get("llm_relevance_score", 0)
-            title = r.get("title", "Untitled")[:60]
-            logger.info(f"      {i}. [{score:.1f}/10] {title}...")
-        logger.info("="*80)
+        logger.info(f"Reranking completed: {len(reranked)} kept from {len(results)}")
         
         return json.dumps(reranked, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.error(f"❌ Reranking failed: {e}")
-        logger.warning("⚠️  Returning original results without reranking")
+        logger.error(f"Reranking failed: {e}")
+        logger.warning("Returning original results without reranking")
         return results_json  # Return original results
 
 
@@ -403,25 +381,16 @@ def search_abstracts(query: str, k: int = 5) -> str:
     Returns:
         候选论文列表，包含 title, abstract 预览, doc_id
     """
-    logger.info("="*80)
-    logger.info("🔎 [PHASE 2: RETRIEVAL] Searching abstracts...")
-    logger.info(f"📝 Query: {query}")
-    logger.info(f"📊 Requested: top {k} papers")
-    logger.info("="*80)
+    logger.info(f"Searching abstracts (top {k}) for: {query}")
     
     client = _get_rag_client()
     results = client.search_abstracts(query, k)
     
     if not results:
-        logger.warning("⚠️  No papers found matching the query")
+        logger.warning("No papers found matching the query")
         return "No papers found matching the query."
     
-    logger.success(f"✅ Found {len(results)} papers")
-    logger.info("📄 Top 3 Results:")
-    for i, r in enumerate(results[:3], 1):
-        title = r.get('title', 'Untitled')[:60]
-        logger.info(f"   {i}. {title}... (doc_id: {r.get('doc_id', 'N/A')[:8]}...)")
-    logger.info("="*80)
+    logger.info(f"Found {len(results)} papers")
     
     output = []
     for i, r in enumerate(results, 1):
@@ -634,10 +603,7 @@ class Searcher:
 
     def _agentic_search(self, query: str) -> Dict[str, Any]:
         """Run the agentic search loop."""
-        logger.info("\n" + "🚀"*40)
-        logger.info("🤖 AGENTIC RAG PIPELINE STARTED")
-        logger.info(f"📝 User Query: {query}")
-        logger.info("🚀"*40 + "\n")
+        logger.info(f"Agentic search started for: {query}")
         
         agent = create_agent(
             model=self.llm, 
@@ -660,19 +626,17 @@ class Searcher:
                     answer = msg.content
                     break
             
-            logger.info("\n" + "✅"*40)
-            logger.info("🎉 AGENTIC RAG PIPELINE COMPLETED")
-            logger.info(f"📊 Total Messages: {len(messages)}")
-            logger.info(f"📝 Answer Length: {len(answer)} chars")
-            logger.info("✅"*40 + "\n")
+            logger.info(
+                "Agentic search completed: messages=%d answer_len=%d"
+                % (len(messages), len(answer))
+            )
             
             return {
                 "answer": answer,
                 "intermediate_steps": messages
             }
         except Exception as e:
-            logger.error(f"❌ Agentic search failed: {e}")
-            logger.error("="*80)
+            logger.error(f"Agentic search failed: {e}")
             return {"answer": f"Search failed: {e}", "intermediate_steps": []}
 
     def search(self, query: str, k: int | None = None) -> List[Dict[str, Any]]:
