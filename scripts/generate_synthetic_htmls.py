@@ -27,6 +27,8 @@ TAILWIND_POOL = [
     "relative", "absolute", "z-10", "overflow-hidden", "flex-col"
 ]
 
+UTILITY_CLASSES = set(TAILWIND_POOL)
+
 # 常见的数据属性，用于训练属性选择器
 DATA_ATTR_POOL = ["data-testid", "data-cy", "data-component", "data-id"]
 
@@ -87,7 +89,8 @@ def generate_attributes(fake: Faker) -> str:
 def generate_list_section(
     fake: Faker, 
     forced_item_class: str | None = None, 
-    forced_structure: Tuple[str, str] | None = None
+    forced_structure: Tuple[str, str] | None = None,
+    variant: str | None = None
 ) -> Dict:
     """
     生成一个列表区块。
@@ -98,102 +101,188 @@ def generate_list_section(
 
     # 决定这个 List 的风格
     style_mode = random.choice(["bem", "tailwind", "hash"])
-    
+    variant = variant or random.choice(["list", "cards", "table", "dl"])
+
     container_class = generate_random_class_string(style_mode)
     item_class = forced_item_class or generate_random_class_string(style_mode)
-    title_tag = random.choice(["h3", "h4", "span", "div"])
+    title_tag = random.choice(["h3", "h4", "span", "div", "strong"])
     
     items_html = []
-    item_count = random.randint(3, 8)
+    item_count = random.randint(8, 30)
+    item_data_attr = None
+
+    # 40% 的概率给 item 打 data-* 标签，便于生成更鲁棒的 selector
+    if random.random() < 0.4:
+        key = random.choice(DATA_ATTR_POOL)
+        val = fake.word()
+        item_data_attr = f'{key}="{val}"'
     
-    for _ in range(item_count):
-        # 构造 Item 内部
+    for idx in range(item_count):
         title_html = f'<{title_tag} class="{generate_random_class_string(style_mode)}">{fake.sentence(nb_words=3).rstrip(".")}</{title_tag}>'
         price_html = f'<span class="{generate_random_class_string(style_mode)}">${random.uniform(10, 100):.2f}</span>'
-        
-        # 随机属性
         extra_attrs = generate_attributes(fake)
-        
-        item_inner = f"""
-            {title_html}
-            {price_html}
-            <p>{fake.word()}</p>
+
+        # 随机隐藏或骨架占位
+        visibility_attr = ""
+        item_class_aug = item_class
+        if random.random() < 0.15:
+            visibility_attr = 'style="display:none"'
+        if random.random() < 0.2:
+            item_class_aug += " skeleton loading"
+
+        if item_data_attr:
+            extra_attrs = f"{item_data_attr} {extra_attrs}".strip()
+
+        extra_text = "".join(f"<p>{fake.paragraph(nb_sentences=2)}</p>" for _ in range(random.randint(0, 2)))
+
+        if variant == "table":
+            row_html = f"""
+            <tr class="{item_class_aug}" {extra_attrs} {visibility_attr}>
+                <td>{idx+1}</td>
+                <td>{title_html}</td>
+                <td>{price_html}</td>
+                <td><span>{fake.word()}</span>{extra_text}</td>
+            </tr>
+            """
+            items_html.append(row_html)
+        elif variant == "dl":
+            row_html = f"""
+            <dt class="{item_class_aug}" {extra_attrs} {visibility_attr}>{title_html}</dt>
+            <dd><span class="{generate_random_class_string(style_mode)}">{fake.text(max_nb_chars=30)}</span> {price_html} {extra_text}</dd>
+            """
+            items_html.append(row_html)
+        elif variant == "cards":
+            card_body = f"""
+                <header>{title_html}</header>
+                <div class="meta">{price_html}</div>
+                <p>{fake.paragraph(nb_sentences=1)}</p>
+                {extra_text}
+            """
+            items_html.append(
+                f'<article class="{item_class_aug}" {extra_attrs} {visibility_attr}>\n{card_body}\n</article>'
+            )
+        else:  # list
+            item_inner = f"""
+                {title_html}
+                {price_html}
+                <p>{fake.word()}</p>
+                {extra_text}
+            """
+            items_html.append(
+                f'<{item_tag} class="{item_class_aug}" {extra_attrs} {visibility_attr}>\n{item_inner}\n</{item_tag}>'
+            )
+
+    if variant == "table":
+        full_html = f"""
+        <table class="{container_class}">
+            <thead><tr><th>#</th><th>Title</th><th>Price</th><th>Note</th></tr></thead>
+            <tbody>
+                {'\n'.join(items_html)}
+            </tbody>
+        </table>
         """
-        
-        items_html.append(
-            f'<{item_tag} class="{item_class}" {extra_attrs}>\n{item_inner}\n</{item_tag}>'
-        )
-    
-    full_html = f"""
-    <{wrapper_tag} class="{container_class}">
-        {'\n'.join(items_html)}
-    </{wrapper_tag}>
-    """
+    elif variant == "dl":
+        full_html = f"""
+        <dl class="{container_class}">
+            {'\n'.join(items_html)}
+        </dl>
+        """
+    else:
+        full_html = f"""
+        <{wrapper_tag} class="{container_class}">
+            {'\n'.join(items_html)}
+        </{wrapper_tag}>
+        """
     
     # 30% 概率增加无意义包裹层 (Wrapper Hell)
     if random.random() < 0.3:
-        full_html = wrap_in_useless_divs(full_html, depth=random.randint(1, 2))
+        full_html = wrap_in_useless_divs(full_html, depth=random.randint(1, 3))
 
     return {
         "html": full_html,
         "item_class": item_class,
         "title_tag": title_tag,
         "structure": structure,
-        "count": item_count
+        "count": item_count,
+        "item_attr": item_data_attr,
+        "variant": variant
     }
+
+def _pick_semantic_class(cls_string: str) -> str:
+    tokens = cls_string.split()
+    for tok in tokens:
+        if tok not in UTILITY_CLASSES:
+            return tok
+    return tokens[-1] if tokens else "item"
+
 
 def build_complex_page(fake: Faker) -> Tuple[str, str]:
     """
-    构建包含对抗样本的复杂页面。
-    策略：
-    1. 生成一个 Target List (Main)。
-    2. (高概率) 生成一个 Trap List (Sidebar/Footer)，它的 Class 和 Target List 完全一样，或者结构完全一样。
-    3. 这样模型必须学会用 Parent ID 来区分。
+    构建包含对抗样本的复杂页面，加入多布局、隐藏节点、骨架和多重陷阱。
     """
     
-    # 1. 生成目标列表
     target_data = generate_list_section(fake)
     target_id = "main-results"
-    
-    # 2. 决定是否生成陷阱 (Adversarial Trap)
-    has_trap = random.random() < 0.7
-    trap_html = ""
-    trap_id = "sidebar-recommendations"
-    
-    if has_trap:
-        # 陷阱策略：使用和目标列表完全一样的 item class，但放在不同容器里
-        trap_data = generate_list_section(
-            fake, 
-            forced_item_class=target_data["item_class"], # <--- 关键：Class 冲突
-            forced_structure=target_data["structure"]
-        )
-        trap_html = f'<aside id="{trap_id}">\n<h3>Recommendations</h3>\n{trap_data["html"]}\n</aside>'
-        
-        # 因为有陷阱，Selector 必须限定父级 ID，否则会选多
-        # 逻辑：#main-results .item-class > h3
-        final_selector = f'#{target_id} .{target_data["item_class"].split()[-1]} > {target_data["title_tag"]}'
-        # 注意：如果是 Tailwind 这种多 class，取最后一个或全部稍微复杂点，这里简化处理取最后一个作为特征
-        # 在真实场景中，GPT-4 会分析出最具代表性的 class
-    else:
-        # 没有陷阱，Selector 可以宽泛一点
-        final_selector = f'.{target_data["item_class"].split()[-1]} > {target_data["title_tag"]}'
 
-    # 3. 组装页面
+    trap_html_blocks = []
+    trap_count = random.randint(1, 2) if random.random() < 0.7 else 0
+    trap_ids = ["sidebar-recommendations", "footer-recos"]
+
+    for i in range(trap_count):
+        trap_data = generate_list_section(
+            fake,
+            forced_item_class=target_data["item_class"],
+            forced_structure=target_data["structure"],
+            variant=target_data["variant"]
+        )
+        trap_html_blocks.append(
+            f'<aside id="{trap_ids[i % len(trap_ids)]}">\n<h3>Recommendations</h3>\n{trap_data["html"]}\n</aside>'
+        )
+
+    # 优先用 data-* 属性构造 selector，其次用语义 class
+    selector_key = None
+    if target_data.get("item_attr"):
+        selector_key = f'[{target_data["item_attr"]}] {target_data["title_tag"]}'
+    else:
+        semantic_cls = _pick_semantic_class(target_data["item_class"])
+        selector_key = f'.{semantic_cls} {target_data["title_tag"]}'
+
+    parent_prefix = f'#{target_id} '
+    final_selector = parent_prefix + selector_key
+
     main_html = f'<div id="{target_id}">\n<h1>Search Results</h1>\n{target_data["html"]}\n</div>'
-    
-    # 随机噪音
+
     noise_top = generate_list_section(fake)["html"] if random.random() < 0.3 else ""
-    
+    long_noise = ""
+    if random.random() < 0.5:
+        long_noise = "\n".join(
+            f"<section class=\"noise\"><h2>{fake.sentence(nb_words=5)}</h2><p>{fake.text(max_nb_chars=600)}</p><p>{fake.text(max_nb_chars=400)}</p></section>"
+            for _ in range(random.randint(2, 5))
+        )
+    script_noise = """
+    <script>
+    // Simulate lazy append
+    document.addEventListener('DOMContentLoaded', () => {
+        const n = document.createElement('div');
+        n.className = 'lazy-placeholder';
+        n.innerHTML = '<p>Loading...</p>';
+        document.body.appendChild(n);
+    });
+    </script>
+    """
+
     body_content = f"""
     <header><nav>...</nav></header>
     <div class="container">
         {noise_top}
+        {long_noise}
         <div class="layout-grid">
             {main_html}
-            {trap_html}
+            {'\n'.join(trap_html_blocks)}
         </div>
     </div>
     <footer>...</footer>
+    {script_noise}
     """
     
     document = f"""<!DOCTYPE html>
@@ -224,4 +313,4 @@ def generate_dataset(count: int, output_dir: Path):
         (output_dir / f"{i:04d}.json").write_text(json.dumps(meta, indent=2))
 
 if __name__ == "__main__":
-    generate_dataset(1000, Path("data/synthetic_complex"))
+    generate_dataset(10, Path("data/synthetic_complex"))
