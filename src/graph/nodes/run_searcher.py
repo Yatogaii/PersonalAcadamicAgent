@@ -2,6 +2,9 @@ from typing import Any, Dict
 
 from agents.searcher import Searcher
 from logging_config import logger
+from settings import settings
+
+from graph.subgraphs.searcher import run_searcher_subgraph
 
 from graph.state import GraphState
 
@@ -16,7 +19,12 @@ def run_searcher(state: GraphState) -> Dict[str, Any]:
 
     try:
         searcher = Searcher()
-        hits = searcher.search(query)
+        if settings.enable_agentic_rag:
+            hits = run_searcher_subgraph(query, k=searcher.top_k)
+            for idx, hit in enumerate(hits, 1):
+                hit.setdefault("id", idx)
+        else:
+            hits = searcher.search(query)
         formatted = searcher.format_hits(hits)
         return {
             "result": {
