@@ -1,35 +1,35 @@
 # Academic Paper RAG System with Multi-Agent Architecture
 
 ## Overview
-A production-ready system that combines **multi-agent orchestration** with **structure-aware agentic RAG** for academic paper collection, indexing, and semantic search.
+A production-ready system that combines **LangGraph orchestration** with **structure-aware agentic RAG** for academic paper collection, indexing, and semantic search.
 
 ## System Architecture
 
-### 1. Multi-Agent Orchestration
+### 1. LangGraph Orchestration
 ```mermaid
 graph TD
     User["User Query"]
-    Coordinator["🎯 Coordinator Agent"]
-    Clarifier["Clarification Agent"]
-    Collector["📰 Paper Collector Agent"]
+    Router["🧭 LangGraph Router"]
+    Collector["📰 Paper Collector"]
     HTMLParser["🔍 HTML Parser Agent"]
-    Searcher["🔎 Agentic Searcher"]
+    Searcher["🔎 Searcher"]
+    Responder["🧾 Responder"]
     
-    User -->|Input| Coordinator
-    Coordinator -->|Needs Clarification| Clarifier
-    Clarifier -->|Refined Query| Coordinator
-    Coordinator -->|Collect Papers| Collector
+    User -->|Input| Router
+    Router -->|Collect| Collector
     Collector -->|Parse HTML Structure| HTMLParser
     HTMLParser -->|Extract Papers| Collector
-    Coordinator -->|Search Papers| Searcher
-    Searcher -->|Results + Citations| Coordinator
-    Coordinator -->|Final Answer| User
+    Router -->|Search| Searcher
+    Searcher -->|Hits + Context| Responder
+    Router -->|Clarify| Responder
+    Collector -->|Summary| Responder
+    Responder -->|Final Answer| User
 ```
 
-**Coordinator Agent** acts as the brain of the system:
-- Intelligently routes user queries to appropriate agents
-- Manages multi-round clarification for ambiguous requests
-- Aggregates results and generates comprehensive answers with citations
+**LangGraph Coordinator** drives the system:
+- Uses an explicit state graph to route tasks deterministically
+- Separates routing, execution, and responding into distinct nodes
+- Produces traceable state for debugging and iteration
 
 ### 2. Agentic RAG Architecture (3-Phase Retrieval Pipeline)
 ```mermaid
@@ -94,11 +94,13 @@ graph LR
 
 ## Core Components
 
+### Graph Layer (`src/graph/`)
+- **pipeline.py**: LangGraph coordinator graph (router → run_searcher/run_collector → respond)
+- **state.py**: Shared state schema for routing, results, and errors
+- **nodes/**: Router, executor, and responder nodes
+
 ### Agent Layer (`src/agents/`)
-- **coordinator.py**: LangChain-based agent orchestrator
-  - Uses tools: `handoff_to_collector()`, `handoff_to_RAG()`
-  - Dynamic routing based on query intent
-  
+- **coordinator.py**: Compatibility wrapper for the LangGraph pipeline
 - **collector.py**: Web scraping + paper collection
   - HTML structure learning via LLM
   - PDF downloading with retry logic
@@ -168,7 +170,7 @@ get_paper_introduction(doc_id)    # Background context
 
 | Layer | Technology |
 |-------|-----------|
-| **LLM & Agents** | LangChain (v1.0), Kimi-K2, DeepSeek API |
+| **LLM & Orchestration** | LangGraph + LangChain, Kimi-K2, DeepSeek API |
 | **Embeddings** | OpenAI, HuggingFace Sentence Transformers |
 | **Vector DB** | Milvus Lite / Milvus Cloud |
 | **PDF Processing** | PyMuPDF, pdfplumber, PyPDF |
@@ -199,6 +201,12 @@ get_paper_introduction(doc_id)    # Background context
 
 ## Usage Example
 
+### CLI (recommended for quick runs)
+
+- Run a single query (no TUI): `python src/main.py --query "..."`
+- Positional args also work: `python src/main.py What are the latest fuzzing techniques?`
+- Start the interactive TUI (default): `python src/main.py`
+
 ```python
 from main import workflow
 
@@ -207,7 +215,7 @@ user_input = "What are the latest fuzzing techniques in USENIX Security 2023-202
 result = workflow(user_input)
 
 # System flow:
-# 1. Coordinator analyzes query → Needs RAG search
+# 1. LangGraph router analyzes query → SEARCH path
 # 2. Searcher Phase 1: Query → ["fuzzing", "bug finding", "vulnerability detection"]
 # 3. Searcher Phase 2: search_abstracts() → [paper_1, paper_2, paper_3]
 # 4. Searcher Phase 2: load_paper_pdfs([paper_1, paper_2]) → chunks indexed
