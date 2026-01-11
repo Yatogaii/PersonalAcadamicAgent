@@ -6,9 +6,6 @@ from rag.retriever import get_rag_client_by_provider
 from rag.pdf_loader import PDFLoader, LoadStatus
 from settings import settings
 from models import get_llm_by_usage
-from prompts.template import apply_prompt_template
-from langchain.tools import tool
-from langchain.agents import create_agent
 
 # Global RAG client and PDF loader for tools
 _rag_client = None
@@ -42,8 +39,7 @@ def _get_agentic_llm():
 
 # ============== Phase 1: Agentic Retrieval Tools ==============
 
-@tool
-def analyze_query(query: str) -> str:
+def analyze_query(query: str) -> Dict[str, Any]:
     """
     [Phase 1] 分析用户查询，生成检索策略和多个子查询。
     这是 Agentic Retrieval 的第一步，必须在检索前调用！
@@ -52,7 +48,7 @@ def analyze_query(query: str) -> str:
         query: 用户的原始查询
     
     Returns:
-        JSON格式的分析结果，包含：
+        Dict with analysis results:
         - query_type: 查询类型（comparison/definition/survey/technical_detail）
         - key_concepts: 关键概念列表
         - sub_queries: 子查询列表（按优先级排序）
@@ -117,7 +113,7 @@ Respond ONLY with a valid JSON object (no markdown, no explanations):
             )
         )
         
-        return json.dumps(analysis, ensure_ascii=False, indent=2)
+        return analysis
     except Exception as e:
         logger.error(f"Query analysis failed: {e}")
         # Fallback: return simple analysis
@@ -129,10 +125,9 @@ Respond ONLY with a valid JSON object (no markdown, no explanations):
             "should_use_hyde": False,
             "reasoning": f"Analysis failed, using original query. Error: {str(e)}"
         }
-        return json.dumps(fallback, ensure_ascii=False, indent=2)
+        return fallback
 
 
-@tool
 def generate_hypothetical_answer(query: str) -> str:
     """
     [Optional - HyDE] 生成假想的理想答案文档，用于改善检索质量。
@@ -176,8 +171,11 @@ Your hypothetical answer:"""
         return query  # Fallback to original query
 
 
-@tool
-def evaluate_retrieval_progress(original_query: str, current_results_summary: str, round_number: int) -> str:
+def evaluate_retrieval_progress(
+    original_query: str,
+    current_results_summary: str,
+    round_number: int,
+) -> Dict[str, Any]:
     """
     [Self-Reflection] 评估当前检索结果是否充分，决定是否需要继续检索。
     
@@ -187,7 +185,7 @@ def evaluate_retrieval_progress(original_query: str, current_results_summary: st
         round_number: 当前是第几轮检索（1-based）
     
     Returns:
-        JSON格式的评估结果，包含：
+        Dict with evaluation results:
         - is_sufficient: 是否已充分
         - coverage_score: 覆盖度评分 (0.0-1.0)
         - missing_aspects: 缺失的方面
@@ -254,7 +252,7 @@ Respond ONLY with a valid JSON object (no markdown, no explanations):
         if evaluation.get("next_focus"):
             logger.info(f"Next focus: {evaluation.get('next_focus')}")
         
-        return json.dumps(evaluation, ensure_ascii=False, indent=2)
+        return evaluation
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")
         # Fallback: stop after round 3
@@ -266,34 +264,27 @@ Respond ONLY with a valid JSON object (no markdown, no explanations):
             "next_focus": "Continue with remaining sub-queries",
             "reasoning": f"Evaluation failed, using heuristic. Error: {str(e)}"
         }
-        return json.dumps(fallback, ensure_ascii=False, indent=2)
+        return fallback
 
 
-@tool
-def rerank_results(original_query: str, results_json: str) -> str:
+def rerank_results(original_query: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     [Final Step] 使用 LLM 对检索结果进行相关性评分和重排序。
     
     Args:
         original_query: 用户的原始查询
-        results_json: 检索结果的 JSON 字符串（包含 title, abstract, doc_id）
+        results: 检索结果列表（包含 title, abstract, doc_id）
     
     Returns:
-        重排序后的结果（JSON 格式），每个结果包含相关性分数
+        Reranked results with relevance scores
     """
     logger.info(f"Reranking results for query: {original_query}")
     
     llm = _get_agentic_llm()
     
-    try:
-        results = json.loads(results_json)
-    except:
-        logger.error("Failed to parse results JSON")
-        return results_json  # Return as-is if parsing fails
-    
     if not results:
         logger.warning("No results to rerank")
-        return results_json
+        return results
     
     logger.info(f"Reranking {len(results)} papers")
     
@@ -359,17 +350,16 @@ Respond ONLY with a valid JSON array (no markdown, no explanations):
         
         logger.info(f"Reranking completed: {len(reranked)} kept from {len(results)}")
         
-        return json.dumps(reranked, ensure_ascii=False, indent=2)
+        return reranked
     except Exception as e:
         logger.error(f"Reranking failed: {e}")
         logger.warning("Returning original results without reranking")
-        return results_json  # Return original results
+        return results  # Return original results
 
 
 # ============== Phase 2: Abstract Search ==============
 
-@tool
-def search_abstracts(query: str, k: int = 5) -> str:
+def search_abstracts(query: str, k: int = 5) -> List[Dict[str, Any]]:
     """
     [Phase 2] 搜索论文摘要，找出相关论文。
     这是搜索的第一步，返回候选论文列表。
@@ -379,7 +369,7 @@ def search_abstracts(query: str, k: int = 5) -> str:
         k: 返回论文数量 (默认 5)
     
     Returns:
-        候选论文列表，包含 title, abstract 预览, doc_id
+        候选论文列表，包含 title, abstract, doc_id
     """
     logger.info(f"Searching abstracts (top {k}) for: {query}")
     
@@ -388,26 +378,34 @@ def search_abstracts(query: str, k: int = 5) -> str:
     
     if not results:
         logger.warning("No papers found matching the query")
-        return "No papers found matching the query."
+        return []
     
     logger.info(f"Found {len(results)} papers")
     
-    output = []
-    for i, r in enumerate(results, 1):
-        abstract = r.get("abstract", "")[:300] + "..." if len(r.get("abstract", "")) > 300 else r.get("abstract", "")
-        output.append(
-            f"[{i}] {r.get('title', 'Untitled')}\n"
-            f"    doc_id: {r.get('doc_id', 'N/A')}\n"
-            f"    Abstract: {abstract}"
+    normalized: List[Dict[str, Any]] = []
+    for r in results:
+        normalized.append(
+            {
+                "title": r.get("title", ""),
+                "abstract": r.get("abstract", ""),
+                "doc_id": r.get("doc_id", ""),
+                "url": r.get("url", ""),
+                "pdf_url": r.get("pdf_url", ""),
+                "conference_name": r.get("conference_name", ""),
+                "conference_year": r.get("conference_year", ""),
+                "score": r.get("score", 0.0),
+                "section_category": r.get("section_category", 0),
+                "parent_section": r.get("parent_section", ""),
+                "page_number": r.get("page_number", 0),
+            }
         )
-    
-    return "\n\n".join(output)
+
+    return normalized
 
 
 # ============== Phase 3: Lazy Load PDF ==============
 
-@tool
-def load_paper_pdfs(doc_ids: List[str]) -> str:
+def load_paper_pdfs(doc_ids: List[str]) -> Dict[str, Any]:
     """
     [Phase 3] 加载指定论文的 PDF 内容到数据库。
     在使用 search_paper_content 之前必须调用此工具！
@@ -417,7 +415,7 @@ def load_paper_pdfs(doc_ids: List[str]) -> str:
         doc_ids: 要加载的论文 doc_id 列表（从 search_abstracts 获取）
     
     Returns:
-        加载状态报告
+        Dict with per-doc load results and summary counts
     
     注意：
         - 一次建议加载 3-5 篇论文，避免等待过长
@@ -426,23 +424,17 @@ def load_paper_pdfs(doc_ids: List[str]) -> str:
     loader = _get_pdf_loader()
     results = loader.load_papers(doc_ids)
     
-    # 格式化输出
-    output = ["PDF Loading Results:"]
     success_count = 0
     skip_count = 0
     fail_count = 0
+    serialized: Dict[str, Any] = {}
     
     for doc_id, result in results.items():
-        status_icon = {
-            LoadStatus.SUCCESS: "✓",
-            LoadStatus.ALREADY_EXISTS: "○",
-            LoadStatus.DOWNLOAD_FAILED: "✗",
-            LoadStatus.PARSE_FAILED: "✗",
-            LoadStatus.NO_PDF_URL: "✗",
-            LoadStatus.NOT_FOUND: "✗",
-        }.get(result.status, "?")
-        
-        output.append(f"  {status_icon} {doc_id}: {result.message}")
+        serialized[doc_id] = {
+            "status": result.status.value,
+            "message": result.message,
+            "chunks_count": result.chunks_count,
+        }
         
         if result.status == LoadStatus.SUCCESS:
             success_count += 1
@@ -451,18 +443,24 @@ def load_paper_pdfs(doc_ids: List[str]) -> str:
         else:
             fail_count += 1
     
-    output.append(f"\nSummary: {success_count} loaded, {skip_count} skipped, {fail_count} failed")
-    
-    if success_count + skip_count > 0:
-        output.append("\nYou can now use search_paper_content to search within these papers.")
-    
-    return "\n".join(output)
+    return {
+        "summary": {
+            "loaded": success_count,
+            "skipped": skip_count,
+            "failed": fail_count,
+        },
+        "results": serialized,
+    }
 
 
 # ============== Phase 4: Deep Search ==============
 
-@tool  
-def search_paper_content(query: str, doc_ids: List[str] = [], category: int = -1, k: int = 5) -> str:
+def search_paper_content(
+    query: str,
+    doc_ids: List[str] | None = None,
+    category: int = -1,
+    k: int = 5,
+) -> List[Dict[str, Any]]:
     """
     [Phase 4] 在已加载的论文中搜索具体内容。
     注意：必须先用 load_paper_pdfs 加载论文！
@@ -480,10 +478,12 @@ def search_paper_content(query: str, doc_ids: List[str] = [], category: int = -1
         k: 返回结果数量 (默认 5)
     
     Returns:
-        匹配的文本片段及其元数据
+        匹配的文本片段及其元数据列表
     """
     client = _get_rag_client()
     
+    doc_ids = doc_ids or []
+
     # 如果指定了 doc_ids，需要逐个搜索并合并结果
     # TODO: 优化为批量搜索
     if doc_ids:
@@ -508,32 +508,28 @@ def search_paper_content(query: str, doc_ids: List[str] = [], category: int = -1
         )
     
     if not results:
-        return "No matching content found. Make sure you have loaded the papers first using load_paper_pdfs."
-    
-    from parser.pdf_parser import SectionCategory
-    
-    output = []
-    for i, r in enumerate(results, 1):
-        cat_id = r.get("section_category", 0)
-        try:
-            cat_name = SectionCategory(cat_id).name
-        except:
-            cat_name = "UNKNOWN"
-        
-        text = r.get("text", "")[:500] + "..." if len(r.get("text", "")) > 500 else r.get("text", "")
-        
-        output.append(
-            f"[{i}] doc_id: {r.get('doc_id', 'N/A')} | chunk_id: {r.get('chunk_id', 'N/A')}\n"
-            f"    Section: {cat_name} | Parent: {r.get('parent_section', 'N/A')}\n"
-            f"    Text: {text}"
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for r in results:
+        normalized.append(
+            {
+                "title": r.get("title", ""),
+                "abstract": r.get("text", ""),
+                "doc_id": r.get("doc_id", ""),
+                "chunk_id": r.get("chunk_id", -1),
+                "section_category": r.get("section_category", 0),
+                "parent_section": r.get("parent_section", ""),
+                "page_number": r.get("page_number", 0),
+                "score": r.get("score", 0.0),
+            }
         )
-    
-    return "\n\n".join(output)
+
+    return normalized
 
 
 # ============== Context Tools ==============
 
-@tool
 def get_context_window(doc_id: str, chunk_id: int, window: int = 1) -> str:
     """
     获取指定 chunk 周围的上下文文本。
@@ -574,93 +570,30 @@ class Searcher:
     def __init__(self) -> None:
         self.rag_client = get_rag_client_by_provider(settings.rag_provider)
         self.top_k = settings.milvus_top_k
-        
-        if settings.enable_agentic_rag:
-            self.llm = get_llm_by_usage('agentic')
-            self._setup_agent()
 
-    def _setup_agent(self):
-        """Setup the LangChain agent with Agentic Retrieval tools."""
-        self.tools = [
-            # Phase 1: Agentic Retrieval
-            analyze_query,
-            generate_hypothetical_answer,
-            evaluate_retrieval_progress,
-            rerank_results,
-            # Phase 2: Abstract search
-            search_abstracts,
-            # Phase 3: Lazy load PDF
-            load_paper_pdfs,
-            # Phase 4: Deep search
-            search_paper_content,
-            # Context tools
-            get_context_window,
-        ]
-        
-        # Load prompt as system message
-        prompt_msgs = apply_prompt_template("agentic_searcher")
-        self.system_prompt = prompt_msgs[0]["content"]
+    def _assign_ids(self, hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for idx, hit in enumerate(hits, 1):
+            if "id" not in hit:
+                hit["id"] = idx
+        return hits
 
-    def _agentic_search(self, query: str) -> Dict[str, Any]:
-        """Run the agentic search loop."""
+    def _agentic_search(self, query: str, k: int) -> List[Dict[str, Any]]:
+        """Run the LangGraph searcher subgraph."""
         logger.info(f"Agentic search started for: {query}")
-        
-        agent = create_agent(
-            model=self.llm, 
-            tools=self.tools,
-        )
-        
-        # Build messages with system prompt and user query
-        msgs = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": query}
-        ]
-        
-        try:
-            result = agent.invoke({"messages": msgs}, config={"recursion_limit": 100})
-            messages = result.get("messages", [])
-            # Get the last AI message as the answer
-            answer = ""
-            for msg in reversed(messages):
-                if hasattr(msg, 'content') and msg.content:
-                    answer = msg.content
-                    break
-            
-            logger.info(
-                "Agentic search completed: messages=%d answer_len=%d"
-                % (len(messages), len(answer))
-            )
-            
-            return {
-                "answer": answer,
-                "intermediate_steps": messages
-            }
-        except Exception as e:
-            logger.error(f"Agentic search failed: {e}")
-            return {"answer": f"Search failed: {e}", "intermediate_steps": []}
+        from graph.subgraphs.searcher import run_searcher_subgraph
+
+        return run_searcher_subgraph(query, k=k)
 
     def search(self, query: str, k: int | None = None) -> List[Dict[str, Any]]:
         """Query vector store and return normalized hits with ids."""
         k = k or self.top_k
         
         if settings.enable_agentic_rag:
-            # Agentic mode: return the agent's analysis
-            result = self._agentic_search(query)
-            # For compatibility, wrap the answer in a hit-like structure
-            return [{
-                "id": 1,
-                "title": "Agentic Search Result",
-                "abstract": result["answer"],
-                "url": "",
-                "doc_id": "agentic",
-                "score": 1.0,
-                "conference_name": "",
-                "conference_year": "",
-                "conference_round": "",
-                "section_category": 0,
-                "parent_section": "",
-                "page_number": 0,
-            }]
+            try:
+                hits = self._agentic_search(query, k)
+                return self._assign_ids(hits)
+            except Exception as exc:
+                logger.error(f"Agentic search failed, falling back to simple search: {exc}")
             
         # Simple mode: direct vector search
         raw_hits = self.rag_client.query_relevant_documents(query)
@@ -689,10 +622,10 @@ class Searcher:
         """Helper for coordinator: render hits into concise numbered blocks."""
         if not hits:
             return "No relevant documents found."
-        
-        # Check if this is an agentic result
-        if len(hits) == 1 and hits[0].get("doc_id") == "agentic":
-            return hits[0].get("abstract", "No answer generated.")
+
+        for idx, hit in enumerate(hits, 1):
+            if "id" not in hit:
+                hit["id"] = idx
         
         from parser.pdf_parser import SectionCategory
         
