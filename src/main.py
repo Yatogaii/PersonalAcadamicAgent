@@ -7,11 +7,9 @@ import argparse
 import sys
 from typing import Any
 
-from agents.coordinator import invoke_coordinator
-from prompts.template import apply_prompt_template
+from graph.pipeline import run_pipeline
 
 from dotenv import load_dotenv
-from settings import settings
 from logging_config import PLAIN_LOG_FORMAT, logger, setup_logging
 from utils import extract_text_from_message_content
 
@@ -19,30 +17,16 @@ try:
     load_dotenv()
 except Exception as e:
     exit(0)
-    
-enable_clarification = False
-MAX_CLARIFICATION_ROUNDS = 3
 
 def workflow(user_input:str):
     # Parse user-input
     user_input = user_input.strip()
 
-    # Invoke Coordinator Agent with clarification
-    is_clarification_complete = False
-    while not is_clarification_complete and enable_clarification:
-        final_state = invoke_coordinator(user_input, enable_clarification)
+    if not user_input:
+        return None
 
-        # Summary current clarification Messages
-        if final_state["need_clarification"] and final_state["clarification_times"]> MAX_CLARIFICATION_ROUNDS:
-            pass
-
-    # Get an summary for all clarification rounds.
-    # clarification_complete will be True iff clarification is enabled and is completed.
-    if is_clarification_complete:
-        pass
-
-    res = invoke_coordinator(user_input, False)
-    return res
+    state = run_pipeline(user_input)
+    return state.get("answer") or state.get("result") or state
 
 
 def _format_answer(result: Any) -> str:
