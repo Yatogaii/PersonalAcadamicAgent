@@ -3,6 +3,8 @@ import logging
 import os
 import pprint
 import threading
+import argparse
+import sys
 from typing import Any
 
 from agents.coordinator import invoke_coordinator
@@ -159,5 +161,40 @@ def run_tui() -> None:
     CoordinatorApp().run()
 
 
+def run_once(query: str) -> None:
+    """Run the workflow once and print the formatted answer to stdout.
+
+    This provides a non-TUI entrypoint useful for scripting and quick checks.
+    """
+    result = workflow(query)
+    if result is None:
+        return
+    print(_format_answer(result))
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the academic agent workflow (TUI by default)."
+    )
+    parser.add_argument(
+        "--query",
+        "-q",
+        type=str,
+        default=None,
+        help="Run a single query without starting the TUI.",
+    )
+    parser.add_argument(
+        "query_args",
+        nargs="*",
+        help="Alternative to --query: positional words joined as the query.",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    run_tui()
+    args = _parse_args(sys.argv[1:])
+    query = (args.query or " ".join(args.query_args)).strip() if (args.query or args.query_args) else ""
+    if query:
+        run_once(query)
+    else:
+        run_tui()
