@@ -11,9 +11,11 @@ class SearcherState(TypedDict, total=False):
     should_use_hyde: bool
     hyde_document: str
     max_rounds: int
+    top_k: int
     all_results: List[Dict[str, Any]]
     round_results: List[Dict[str, Any]]
     deep_results: List[Dict[str, Any]]
+    loaded_doc_ids: List[str]
     evaluation: Dict[str, Any]
     should_continue: bool
     use_deep_search: bool
