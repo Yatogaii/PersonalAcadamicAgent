@@ -558,7 +558,7 @@ class Searcher:
     """RAG searcher that supports both simple and agentic modes.
 
     - Simple mode: Direct vector search (only abstracts)
-    - Agentic mode: LLM agent with Lazy Load PDF workflow
+    - Agentic mode: LangGraph subgraph with Lazy Load PDF workflow
     
     Lazy Load Workflow:
     1. search_abstracts - 找候选论文
