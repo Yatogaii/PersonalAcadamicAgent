@@ -25,6 +25,7 @@ dependencies = [
     "pypdf>=6.4.0",
     "pymupdf>=1.26.6",
     "textual>=0.59.0",
+    "langgraph>=1.0.2",
 ]
 
 [project.optional-dependencies]
