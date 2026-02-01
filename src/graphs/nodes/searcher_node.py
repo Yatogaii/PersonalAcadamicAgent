@@ -1,7 +1,6 @@
 """Searcher Node for LangGraph.
 
-This node wraps the RAG search logic from the original Searcher Agent.
-Will be fully implemented in Phase 4.
+This node invokes the searcher subgraph to execute the full RAG search workflow.
 """
 
 from langgraph.graph import MessagesState
@@ -9,44 +8,108 @@ from langgraph.types import Command
 from typing import Literal
 from logging_config import logger
 
+from graphs.searcher_graph import searcher_subgraph, SearcherState
+
 
 def searcher_node(state: MessagesState) -> Command[Literal["__end__"]]:
-    """Placeholder searcher node.
+    """Execute searcher subgraph to perform RAG search.
 
-    TODO: Implement full searcher logic from agents/searcher.py
-    - Analyze query and generate sub-queries
-    - Search abstracts
-    - Load PDFs (lazy loading)
-    - Search paper content
-    - Rerank results
-    - Generate answer
+    Invokes the Agentic RAG workflow with query analysis, retrieval,
+    and self-reflection loops.
 
     Args:
-        state: Graph state with intent and original_query
+        state: Graph state with intent and original_query from coordinator
 
     Returns:
-        Command to end the subgraph
+        Command to end with search results
     """
-    logger.info("Searcher node invoked (placeholder)")
+    logger.info("Searcher node invoked")
 
-    # Extract parameters from state
-    intent = state.get("intent", "unknown")
+    # Extract query from state
     query = state.get("original_query", "")
 
-    # TODO: Implement full Agentic RAG workflow
-    # For now, return a placeholder response
-    result = {
-        "status": "placeholder",
-        "message": f"Searcher would process: {query}",
-        "query_type": "TBD",
-        "papers_found": 0,
-        "answer": "Placeholder answer - full implementation coming in Phase 4",
+    if not query:
+        logger.error("No query provided to searcher")
+        error_result = {
+            "status": "error",
+            "message": "No query provided",
+            "query_type": "unknown",
+            "papers_found": 0,
+            "answer": "Error: No query provided for search",
+        }
+        return Command(
+            goto="__end__",
+            update={
+                "messages": [{"role": "assistant", "content": error_result["message"]}],
+                "searcher_result": error_result,
+            },
+        )
+
+    logger.info(f"Searcher query: {query}")
+
+    # Prepare initial state for subgraph
+    searcher_state: SearcherState = {
+        "query": query,
+        "query_analysis": {},
+        "sub_queries": [],
+        "current_sub_query_index": 0,
+        "use_hyde": False,
+        "hyde_document": "",
+        "retrieval_round": 1,
+        "candidate_papers": [],
+        "loaded_doc_ids": [],
+        "search_results": [],
+        "is_sufficient": False,
+        "coverage_score": 0.0,
+        "reranked_results": [],
+        "answer": "",
+        "status": "pending",
     }
 
-    return Command(
-        goto="__end__",
-        update={
-            "messages": [{"role": "assistant", "content": str(result)}],
-            "searcher_result": result,
-        },
-    )
+    try:
+        # Invoke the searcher subgraph
+        result = searcher_subgraph.invoke(searcher_state)
+
+        # Format result for coordinator
+        final_result = {
+            "status": result.get("status", "unknown"),
+            "message": "Search completed successfully"
+            if result.get("status") == "success"
+            else "Search completed with issues",
+            "query": query,
+            "query_type": result.get("query_analysis", {}).get("query_type", "unknown"),
+            "papers_found": len(result.get("reranked_results", [])),
+            "answer": result.get("answer", "No answer generated"),
+            "coverage_score": result.get("coverage_score", 0.0),
+        }
+
+        logger.info(
+            f"Searcher completed: {len(result.get('reranked_results', []))} papers found"
+        )
+
+        return Command(
+            goto="__end__",
+            update={
+                "messages": [{"role": "assistant", "content": final_result["answer"]}],
+                "searcher_result": final_result,
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Searcher subgraph failed: {e}")
+        error_result = {
+            "status": "error",
+            "message": f"Search failed: {str(e)}",
+            "query": query,
+            "query_type": "unknown",
+            "papers_found": 0,
+            "answer": f"Sorry, the search encountered an error: {str(e)}",
+        }
+
+        return Command(
+            goto="__end__",
+            update={
+                "messages": [{"role": "assistant", "content": error_result["answer"]}],
+                "searcher_result": error_result,
+            },
+        )
