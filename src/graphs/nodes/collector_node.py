@@ -3,15 +3,15 @@
 This node invokes the collector subgraph to execute the full paper collection workflow.
 """
 
-from langgraph.graph import MessagesState
 from langgraph.types import Command
 from typing import Literal
 from logging_config import logger
 
 from graphs.collector_graph import collector_subgraph, CollectorState
+from graphs.states import CoordinatorState
 
 
-def collector_node(state: MessagesState) -> Command[Literal["__end__"]]:
+def collector_node(state: CoordinatorState) -> Command[Literal["__end__"]]:
     """Execute collector subgraph to collect papers from conference.
 
     Extracts parameters from the original query and invokes the collector workflow.
@@ -54,7 +54,7 @@ def collector_node(state: MessagesState) -> Command[Literal["__end__"]]:
     )
 
     # Prepare initial state for subgraph
-    collector_state: CollectorState = {
+    collector_input: CollectorState = {
         "conference_name": conference,
         "year": year,
         "round": round_val,
@@ -68,7 +68,7 @@ def collector_node(state: MessagesState) -> Command[Literal["__end__"]]:
 
     try:
         # Invoke the collector subgraph
-        result = collector_subgraph.invoke(collector_state)
+        result = collector_subgraph.invoke(collector_input)
 
         # Format result for coordinator
         final_result = {
@@ -87,7 +87,6 @@ def collector_node(state: MessagesState) -> Command[Literal["__end__"]]:
             goto="__end__",
             update={
                 "messages": [{"role": "assistant", "content": final_result["message"]}],
-                "collector_result": final_result,
             },
         )
 
@@ -106,6 +105,5 @@ def collector_node(state: MessagesState) -> Command[Literal["__end__"]]:
             goto="__end__",
             update={
                 "messages": [{"role": "assistant", "content": error_result["message"]}],
-                "collector_result": error_result,
             },
         )

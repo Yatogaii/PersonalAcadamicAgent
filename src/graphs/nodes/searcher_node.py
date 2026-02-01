@@ -3,15 +3,15 @@
 This node invokes the searcher subgraph to execute the full RAG search workflow.
 """
 
-from langgraph.graph import MessagesState
 from langgraph.types import Command
 from typing import Literal
 from logging_config import logger
 
 from graphs.searcher_graph import searcher_subgraph, SearcherState
+from graphs.states import CoordinatorState
 
 
-def searcher_node(state: MessagesState) -> Command[Literal["__end__"]]:
+def searcher_node(state: CoordinatorState) -> Command[Literal["__end__"]]:
     """Execute searcher subgraph to perform RAG search.
 
     Invokes the Agentic RAG workflow with query analysis, retrieval,
@@ -40,15 +40,14 @@ def searcher_node(state: MessagesState) -> Command[Literal["__end__"]]:
         return Command(
             goto="__end__",
             update={
-                "messages": [{"role": "assistant", "content": error_result["message"]}],
-                "searcher_result": error_result,
+                "messages": [{"role": "assistant", "content": error_result["answer"]}],
             },
         )
 
     logger.info(f"Searcher query: {query}")
 
     # Prepare initial state for subgraph
-    searcher_state: SearcherState = {
+    searcher_input: SearcherState = {
         "query": query,
         "query_analysis": {},
         "sub_queries": [],
@@ -68,7 +67,7 @@ def searcher_node(state: MessagesState) -> Command[Literal["__end__"]]:
 
     try:
         # Invoke the searcher subgraph
-        result = searcher_subgraph.invoke(searcher_state)
+        result = searcher_subgraph.invoke(searcher_input)
 
         # Format result for coordinator
         final_result = {
@@ -91,7 +90,6 @@ def searcher_node(state: MessagesState) -> Command[Literal["__end__"]]:
             goto="__end__",
             update={
                 "messages": [{"role": "assistant", "content": final_result["answer"]}],
-                "searcher_result": final_result,
             },
         )
 
@@ -110,6 +108,5 @@ def searcher_node(state: MessagesState) -> Command[Literal["__end__"]]:
             goto="__end__",
             update={
                 "messages": [{"role": "assistant", "content": error_result["answer"]}],
-                "searcher_result": error_result,
             },
         )

@@ -5,9 +5,12 @@ It replaces the implicit agent-based routing with explicit graph structure.
 """
 
 from typing import Literal
-from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
 from logging_config import logger
+
+# Import state definitions
+from graphs.states import CoordinatorState
 
 # Import the node implementations
 from graphs.nodes.collector_node import collector_node
@@ -15,7 +18,7 @@ from graphs.nodes.searcher_node import searcher_node
 
 
 def coordinator_router(
-    state: MessagesState,
+    state: CoordinatorState,
 ) -> Command[Literal["collector", "searcher", END]]:
     """Route user requests to appropriate subgraph based on intent.
 
@@ -31,7 +34,9 @@ def coordinator_router(
     messages = state.get("messages", [])
     if not messages:
         logger.warning("No messages in state, ending graph")
-        return Command(goto=END, update={"error": "No messages provided"})
+        return Command(
+            goto=END, update={"error": "No messages provided", "goto": "end"}
+        )
 
     # Get the last user message
     last_message = messages[-1]
@@ -88,25 +93,32 @@ def coordinator_router(
 
     # Route based on detected intent
     if is_collect and not is_search:
-        logger.success("Routing to collector subgraph")
+        logger.info("Routing to collector subgraph")
         return Command(
-            goto="collector", update={"intent": "collect", "original_query": content}
+            goto="collector",
+            update={
+                "intent": "collect",
+                "original_query": content,
+                "goto": "collector",
+            },
         )
     elif is_search or not is_collect:
-        logger.success("Routing to searcher subgraph")
+        logger.info("Routing to searcher subgraph")
         return Command(
-            goto="searcher", update={"intent": "search", "original_query": content}
+            goto="searcher",
+            update={"intent": "search", "original_query": content, "goto": "searcher"},
         )
     else:
         # Ambiguous or fallback to search
         logger.info("Ambiguous intent, defaulting to searcher")
         return Command(
-            goto="searcher", update={"intent": "search", "original_query": content}
+            goto="searcher",
+            update={"intent": "search", "original_query": content, "goto": "searcher"},
         )
 
 
 # Build the coordinator graph
-workflow = StateGraph(MessagesState)
+workflow = StateGraph(CoordinatorState)
 
 # Add nodes
 workflow.add_node("coordinator", coordinator_router)
@@ -131,4 +143,4 @@ workflow.add_edge("searcher", END)
 coordinator_graph = workflow.compile()
 
 # Export for external use
-__all__ = ["coordinator_graph", "coordinator_router"]
+__all__ = ["coordinator_graph", "coordinator_router", "CoordinatorState"]
