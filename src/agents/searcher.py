@@ -573,7 +573,7 @@ class Searcher:
 
     def __init__(self) -> None:
         self.rag_client = get_rag_client_by_provider(settings.rag_provider)
-        self.top_k = settings.milvus_top_k
+        self.top_k = getattr(settings, "rag_top_k", None) or settings.milvus_top_k
         
         if settings.enable_agentic_rag:
             self.llm = get_llm_by_usage('agentic')

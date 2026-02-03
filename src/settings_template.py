@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     debug_mode: bool = False
     database_url: Optional[str] = None
 
-    rag_provider: str = "milvus"
+    rag_provider: str = "sqlite"
+    rag_top_k: int = 10
 
     # --- Milvus / vectorstore ---
     milvus_uri: str = "http://localhost:19530"
@@ -31,6 +32,11 @@ class Settings(BaseSettings):
     milvus_conference_name_field: str = "conference_name"
     milvus_conference_year_field: str = "conference_year"
     milvus_conference_round_field: str = "conference_round"
+
+    # --- SQLite / sqlite-vec ---
+    sqlite_path: str = "./data/rag.sqlite"
+    sqlite_table: str = "papers"
+    sqlite_distance_metric: str = ""
 
     # --- Embedding model ---
     embedding_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
