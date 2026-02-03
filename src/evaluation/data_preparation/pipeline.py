@@ -14,8 +14,10 @@ from dataclasses import dataclass, field
 
 from logging_config import logger
 
+from settings import settings
+
 if TYPE_CHECKING:
-    from rag.milvus import MilvusProvider
+    from rag.retriever import RAG
     from langchain_core.language_models.chat_models import BaseChatModel
 
 from evaluation.config import EvaluationConfig, ChunkStrategy
@@ -44,13 +46,13 @@ class DataPreparationPipeline:
     
     def __init__(
         self,
-        source_rag_client: "MilvusProvider",
+        source_rag_client: "RAG",
         llm_client: Optional["BaseChatModel"] = None,
         config: Optional[EvaluationConfig] = None
     ):
         """
         Args:
-            source_rag_client: 业务库 MilvusProvider 客户端
+            source_rag_client: 业务库 RAG 客户端
             llm_client: LLM 客户端 (用于 Contextual Chunking)
             config: 评估配置
         """
@@ -68,6 +70,89 @@ class DataPreparationPipeline:
         
         # 用于跟踪保存的 chunks
         self._chunks_saved_count = 0
+
+    def _new_rag_client(self):
+        provider = settings.rag_provider
+        if provider == "sqlite":
+            from rag.sqlite_vec import SQLiteVecProvider
+            return SQLiteVecProvider()
+        if provider == "milvus":
+            from rag.milvus import MilvusProvider
+            return MilvusProvider()
+        if provider == "pgvector":
+            from rag.pgvector import PGVectorProvider
+            return PGVectorProvider()
+        raise ValueError(f"Unsupported RAG provider for evaluation: {provider}")
+
+    def _vector_payload(self, rag_client, vector: list[float]) -> str:
+        if hasattr(rag_client, "_vector_to_sql"):
+            return rag_client._vector_to_sql(vector)
+        return json.dumps(vector)
+
+    def _insert_paper_record(self, rag_client, paper: PaperSource, title: str | None = None):
+        """Insert paper-level record into the target store with a fixed doc_id."""
+        title = title or paper.title
+        vector = rag_client.embedding_client.embed_query(
+            f"Title: {title}\nAbstract: {paper.abstract}"
+        )
+
+        if hasattr(rag_client, "conn"):
+            sql = f"""
+            INSERT INTO {rag_client.table} (
+                {rag_client.vector_field},
+                {rag_client.doc_id_field},
+                {rag_client.chunk_id_field},
+                {rag_client.section_category_field},
+                {rag_client.conference_name_field},
+                {rag_client.conference_year_field},
+                {rag_client.conference_round_field},
+                {rag_client.title_field},
+                {rag_client.text_field},
+                {rag_client.url_field},
+                {rag_client.pdf_url_field},
+                {rag_client.parent_section_field},
+                {rag_client.page_number_field}
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            rag_client.conn.execute(
+                sql,
+                (
+                    self._vector_payload(rag_client, vector),
+                    paper.doc_id,
+                    -1,
+                    0,
+                    paper.conference_name,
+                    paper.conference_year,
+                    paper.conference_round,
+                    title,
+                    paper.abstract,
+                    paper.url,
+                    paper.pdf_url,
+                    "",
+                    1,
+                ),
+            )
+            rag_client.conn.commit()
+            return
+
+        rag_client.client.insert(
+            collection_name=rag_client.collection,
+            data={
+                rag_client.doc_id_field: paper.doc_id,
+                rag_client.vector_field: vector,
+                rag_client.title_field: title,
+                rag_client.text_field: paper.abstract,
+                rag_client.url_field: paper.url,
+                rag_client.pdf_url_field: paper.pdf_url,
+                rag_client.conference_name_field: paper.conference_name,
+                rag_client.conference_year_field: paper.conference_year,
+                rag_client.conference_round_field: paper.conference_round,
+                rag_client.chunk_id_field: -1,
+                rag_client.section_category_field: 0,
+                rag_client.parent_section_field: "",
+                rag_client.page_number_field: 1,
+            },
+        )
     
     def run(
         self,
@@ -160,7 +245,6 @@ class DataPreparationPipeline:
         注意：需要先把 paper-level 记录复制到评估 collection，
         因为 PDFLoader.get_paper_metadata() 会从当前 collection 查询
         """
-        from rag.milvus import MilvusProvider
         from rag.pdf_loader import PDFLoader, LoadStatus
         
         stats = {"processed": 0, "success": 0, "failed": 0, "chunks_saved": 0}
@@ -192,8 +276,8 @@ class DataPreparationPipeline:
         
         # 4. 使用 Context Manager 切换到评估 collection 和 chunk 策略
         with self.collection_builder.use_chunk_strategy(strategy):
-            # 创建新的 MilvusProvider（会使用修改后的 settings）
-            eval_rag_client = MilvusProvider()
+            # 创建新的 RAG 客户端（会使用修改后的 settings）
+            eval_rag_client = self._new_rag_client()
             
             # 5. 复制 paper-level 记录到评估 collection
             # PDFLoader 需要从 collection 查询 metadata
@@ -251,35 +335,14 @@ class DataPreparationPipeline:
             logger.info(f"  Failed: {result.papers_failed.get(strategy, 0)}")
             logger.info(f"  Chunks saved: {result.chunks_saved.get(strategy, 0)}")
     
-    def _copy_paper_records(self, papers: list[PaperSource], eval_rag_client: "MilvusProvider"):
+    def _copy_paper_records(self, papers: list[PaperSource], eval_rag_client: "RAG"):
         """
         复制 paper-level 记录到评估 collection
         
         PDFLoader 需要从 collection 查询 metadata（pdf_url 等）
         """
         for paper in papers:
-            # 使用 insert_document 插入 paper-level 记录
-            # 但需要保持原有的 doc_id
-            eval_rag_client.client.insert(
-                collection_name=eval_rag_client.collection,
-                data={
-                    eval_rag_client.doc_id_field: paper.doc_id,
-                    eval_rag_client.vector_field: eval_rag_client.embedding_client.embed_query(
-                        f"Title: {paper.title}\nAbstract: {paper.abstract}"
-                    ),
-                    eval_rag_client.title_field: paper.title,
-                    eval_rag_client.text_field: paper.abstract,
-                    eval_rag_client.url_field: paper.url,
-                    eval_rag_client.pdf_url_field: paper.pdf_url,
-                    eval_rag_client.conference_name_field: paper.conference_name,
-                    eval_rag_client.conference_year_field: paper.conference_year,
-                    eval_rag_client.conference_round_field: paper.conference_round,
-                    eval_rag_client.chunk_id_field: -1,  # paper-level
-                    eval_rag_client.section_category_field: 0,
-                    eval_rag_client.parent_section_field: "",
-                    eval_rag_client.page_number_field: 1,
-                }
-            )
+            self._insert_paper_record(eval_rag_client, paper)
         logger.info(f"Copied {len(papers)} paper-level records")
     
     # ============== 单独步骤方法（便于调试） ==============
@@ -317,8 +380,6 @@ class DataPreparationPipeline:
         Returns:
             成功插入的 chunks 数量
         """
-        from rag.milvus import MilvusProvider
-        
         chunks_dir = self.config.chunks_dir / strategy.value
         
         if not chunks_dir.exists():
@@ -339,7 +400,7 @@ class DataPreparationPipeline:
         
         # 2. 切换到评估 collection
         with self.collection_builder.use_chunk_strategy(strategy):
-            eval_rag_client = MilvusProvider()
+            eval_rag_client = self._new_rag_client()
             
             for chunk_file in chunk_files:
                 with open(chunk_file, "r", encoding="utf-8") as f:
@@ -352,27 +413,17 @@ class DataPreparationPipeline:
                 # 加载 source paper 信息（从文件或数据库）
                 paper_info = self._get_paper_info(doc_id)
                 
-                # 插入 paper-level 记录
-                eval_rag_client.client.insert(
-                    collection_name=eval_rag_client.collection,
-                    data={
-                        eval_rag_client.doc_id_field: doc_id,
-                        eval_rag_client.vector_field: eval_rag_client.embedding_client.embed_query(
-                            f"Title: {title}\nAbstract: {paper_info.get('abstract', '')[:500]}"
-                        ),
-                        eval_rag_client.title_field: title,
-                        eval_rag_client.text_field: paper_info.get("abstract", ""),
-                        eval_rag_client.url_field: paper_info.get("url", ""),
-                        eval_rag_client.pdf_url_field: paper_info.get("pdf_url", ""),
-                        eval_rag_client.conference_name_field: paper_info.get("conference_name", ""),
-                        eval_rag_client.conference_year_field: paper_info.get("conference_year", 0),
-                        eval_rag_client.conference_round_field: paper_info.get("conference_round", ""),
-                        eval_rag_client.chunk_id_field: -1,
-                        eval_rag_client.section_category_field: 0,
-                        eval_rag_client.parent_section_field: "",
-                        eval_rag_client.page_number_field: 1,
-                    }
+                paper_meta = PaperSource(
+                    doc_id=doc_id,
+                    title=title,
+                    abstract=paper_info.get("abstract", ""),
+                    pdf_url=paper_info.get("pdf_url", ""),
+                    url=paper_info.get("url", ""),
+                    conference_name=paper_info.get("conference_name", ""),
+                    conference_year=paper_info.get("conference_year", 0),
+                    conference_round=paper_info.get("conference_round", ""),
                 )
+                self._insert_paper_record(eval_rag_client, paper_meta, title=title)
                 
                 # 插入 chunks
                 eval_rag_client.insert_paper_chunks(doc_id, chunks, title)
