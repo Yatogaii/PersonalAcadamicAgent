@@ -7,12 +7,12 @@ flowchart LR
   HTMLParse[HTML Parse Agent]
   Summary[Summary Agent]
   Search[Search Agent]
-  Milvus[(Milvus)]
+  SQLite[(SQLite Vec)]
   Return((Summary Agent))
 
   Coordinator --> UC --> Summary --> Coordinator
-  Coordinator --> Collector --> HTMLParse --> Milvus --> Return
-  Coordinator --> Search --> Milvus --> Return
+  Coordinator --> Collector --> HTMLParse --> SQLite --> Return
+  Coordinator --> Search --> SQLite --> Return
 ```
 
 

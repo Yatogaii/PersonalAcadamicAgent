@@ -74,7 +74,7 @@ def handoff_to_RAG(query: str):
 # Coordinator Agent
 # If need clarification, then return.
 # If need search new paper, handoff to paper collector agent.
-# If search for topic, just search from the milvus.
+# If search for topic, just search from the vector store.
 def invoke_coordinator(user_input:str, enable_clarification:bool) -> dict:
     res = {}
     main_agent = create_agent(
