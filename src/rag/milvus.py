@@ -1,10 +1,8 @@
 from pymilvus import MilvusClient, FieldSchema, DataType, CollectionSchema
+from models import get_llm_by_usage
 from rag.retriever import RAG, Chunk
-from rag.feature_extractor import FeatureExtractor
 from uuid import uuid4
 from settings import settings
-
-from langchain.embeddings import init_embeddings
 
 """
 Milvus(lite) Implementation for RAG.
@@ -55,11 +53,7 @@ class MilvusProvider(RAG):
         self._get_client()
 
         # --- Feature Extractor ---
-        self.embedding_client = FeatureExtractor(
-            provider=settings.embedding_provider,
-            api_key=settings.HF_TOKEN,
-            model=settings.embedding_model
-        )
+        self.embedding_client = get_llm_by_usage("contextual", model_type="embedding")
         
     def _create_schema(self) -> CollectionSchema:
         """Schema for unified collection (papers + chunks)."""

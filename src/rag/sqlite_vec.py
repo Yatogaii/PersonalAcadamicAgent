@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from logging_config import logger
-from rag.feature_extractor import FeatureExtractor
+from models import get_llm_by_usage
 from rag.retriever import RAG, Chunk
 from settings import settings
 
@@ -40,11 +40,7 @@ class SQLiteVecProvider(RAG):
         ).strip()
 
         # Embedding model configuration
-        self.embedding_client = FeatureExtractor(
-            provider=settings.embedding_provider,
-            api_key=settings.HF_TOKEN,
-            model=settings.embedding_model,
-        )
+        self.embedding_client = get_llm_by_usage("contextual", model_type="embedding")
 
         self._connect()
 

@@ -54,9 +54,9 @@ class Settings(BaseSettings):
     postgres_table_name: str = "papers"
 
     # --- Embedding model ---
-    embedding_provider: str = "ollama"
-    embedding_model: str = "qwen3-embedding:4b"
-    embedding_model_base_url: str = "https://huggingface.co/"
+    embedding_provider: str = "openai"
+    embedding_model: str = "Qwen/Qwen3-Embedding-8B"
+    embedding_model_base_url: str = "https://api-inference.modelscope.cn/v1"
     embedding_model_api_key: str = ""
     embedding_dim: int = 2560    
     chunk_strategy: str = "paragraph" # Support: paragraph, fixed_size, sentence, contextual.

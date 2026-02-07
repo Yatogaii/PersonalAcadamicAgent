@@ -39,8 +39,9 @@ class Settings(BaseSettings):
     sqlite_distance_metric: str = ""
 
     # --- Embedding model ---
-    embedding_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    embedding_model_base_url: str = "https://huggingface.co/"
+    embedding_provider: str = "openai"
+    embedding_model: str = "Qwen/Qwen3-Embedding-8B"
+    embedding_model_base_url: str = "https://api-inference.modelscope.cn/v1"
     embedding_model_api_key: str = ""
     embedding_dim: int = 2048
     

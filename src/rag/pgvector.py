@@ -1,8 +1,8 @@
 import uuid
 import psycopg2
 from psycopg2.extras import execute_values
+from models import get_llm_by_usage
 from rag.retriever import RAG, Chunk
-from rag.feature_extractor import FeatureExtractor
 from settings import settings
 
 # https://pixion.co/blog/vector-database-benchmark-chroma-vs-milvus-vs-pgvector-vs-redis
@@ -20,11 +20,7 @@ class PGVectorProvider(RAG):
         self.dim = settings.embedding_dim
         
         # Embedding model configuration
-        self.embedding_client = FeatureExtractor(
-            provider=settings.embedding_provider,
-            api_key=settings.HF_TOKEN,
-            model=settings.embedding_model
-        )
+        self.embedding_client = get_llm_by_usage("contextual", model_type="embedding")
 
         self.conn = self._get_connection()
         self._ensure_table_exists()
