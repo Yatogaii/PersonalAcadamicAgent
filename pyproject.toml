@@ -17,7 +17,6 @@ dependencies = [
     "langchain-huggingface>=1.0.1",
     "langchain-ollama>=1.0.0",
     "langchain-openai>=1.0.2",
-    "pymilvus==2.6.3",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.0.0",
     "sentence-transformers>=5.1.2",
@@ -30,3 +29,9 @@ dependencies = [
 
 [project.optional-dependencies]
 milvus-lite = ["milvus-lite>=2.5.1"]
+milvus = [
+    "pymilvus==2.6.3",
+]
+sqlite = [
+    "sqlite-vec>=0.1.6",
+]

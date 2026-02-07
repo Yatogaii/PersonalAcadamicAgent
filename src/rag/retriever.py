@@ -133,6 +133,9 @@ def get_rag_client_by_provider(provider: str) -> RAG:
         if provider == 'milvus':
             from .milvus import MilvusProvider
             _rag_clients[provider] = MilvusProvider()
+        elif provider == 'sqlite':
+            from .sqlite_vec import SQLiteVecProvider
+            _rag_clients[provider] = SQLiteVecProvider()
         elif provider == 'pgvector':
             from .pgvector import PGVectorProvider
             _rag_clients[provider] = PGVectorProvider()

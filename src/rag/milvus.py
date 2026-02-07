@@ -18,7 +18,7 @@ class MilvusProvider(RAG):
         self.collection: str = settings.milvus_collection
 
         # --- Search configuration ---
-        self.top_k: int = settings.milvus_top_k
+        self.top_k: int = getattr(settings, "rag_top_k", None) or settings.milvus_top_k
         
         # --- Field names ---
         self.id_field: str = settings.milvus_id_field

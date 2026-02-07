@@ -119,7 +119,7 @@ uv run python scripts/run_full_evaluation.py --compare --sample 20 --num-questio
 
 | 资源 | 数量 | 说明 |
 |------|------|------|
-| **Milvus Collections** | 2 个 | `papers_eval_paragraph`, `papers_eval_contextual` |
+| **Eval Tables/Collections** | 2 个 | sqlite-vec 表或 Milvus collection：`papers_eval_paragraph`, `papers_eval_contextual` |
 | **索引重建** | 6 次 | 每个 collection 重建 3 种索引类型 |
 | **评估运行** | 12 次 | 2 chunk × 3 index × 2 agentic |
 | **LLM 调用** | ~30×12 次 (L3) | 每个 QA 需要 LLM 评判 |
@@ -273,7 +273,7 @@ uv run python scripts/run_full_evaluation.py --generate-qa --num-questions 50
 │                         RAG Components                           │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────┐ │
-│  │  MilvusProvider │    │   Embedding     │    │     LLM      │ │
+│  │  RAG Provider   │    │   Embedding     │    │     LLM      │ │
 │  │                 │    │                 │    │              │ │
 │  │ • search_abstracts│  │ • qwen3-embedding│   │ • qwen3:8b   │ │
 │  │ • search_by_section│ │ • dim=2560      │    │              │ │
@@ -452,7 +452,8 @@ builder.create_collection(
 **完整对比实验**:
 ```python
 from evaluation.runner import EvaluationRunner
-from rag.milvus import MilvusProvider
+from rag.retriever import get_rag_client_by_provider
+from settings import settings
 
 results = {}
 for index_type in ["FLAT", "HNSW", "IVF_FLAT"]:
@@ -462,8 +463,8 @@ for index_type in ["FLAT", "HNSW", "IVF_FLAT"]:
     
     # 2. 运行评估
     with builder.use_chunk_strategy(ChunkStrategy.PARAGRAPH):
-        milvus = MilvusProvider()
-        runner = EvaluationRunner(rag_client=milvus, config=config)
+        rag_client = get_rag_client_by_provider(settings.rag_provider)
+        runner = EvaluationRunner(rag_client=rag_client, config=config)
         report = runner.run_all()
         results[index_type] = report
 ```
@@ -482,12 +483,14 @@ for index_type in ["FLAT", "HNSW", "IVF_FLAT"]:
 
 ```python
 from evaluation.config import ChunkStrategy
+from rag.retriever import get_rag_client_by_provider
+from settings import settings
 
 # 使用不同策略
 for strategy in [ChunkStrategy.PARAGRAPH, ChunkStrategy.SENTENCE]:
     with builder.use_chunk_strategy(strategy):
-        milvus = MilvusProvider()
-        runner = EvaluationRunner(rag_client=milvus)
+        rag_client = get_rag_client_by_provider(settings.rag_provider)
+        runner = EvaluationRunner(rag_client=rag_client)
         report = runner.run_all()
 ```
 
@@ -503,8 +506,12 @@ uv run python scripts/run_full_evaluation.py --prepare-only --sample 20
 
 **Non-Agentic（当前实现）**: 直接向量检索
 ```python
-# 直接调用 MilvusProvider
-results = milvus.search_abstracts(query, k=10)
+from rag.retriever import get_rag_client_by_provider
+from settings import settings
+
+rag_client = get_rag_client_by_provider(settings.rag_provider)
+# 直接调用当前 RAG Provider
+results = rag_client.search_abstracts(query, k=10)
 ```
 
 **Agentic RAG（扩展）**: 需要实现 AgenticSearcher
@@ -513,10 +520,10 @@ results = milvus.search_abstracts(query, k=10)
 from agents.searcher import AgenticSearcher
 
 class AgenticRAG:
-    def __init__(self, milvus: MilvusProvider, llm):
-        self.milvus = milvus
+    def __init__(self, rag_client, llm):
+        self.rag_client = rag_client
         self.llm = llm
-        self.searcher = AgenticSearcher(milvus, llm)
+        self.searcher = AgenticSearcher(rag_client, llm)
     
     def search_abstracts(self, query: str, k: int = 10):
         # Agent 决定如何检索
@@ -526,10 +533,10 @@ class AgenticRAG:
 **对比方法**:
 ```python
 # Non-Agentic
-runner_basic = EvaluationRunner(rag_client=milvus)
+runner_basic = EvaluationRunner(rag_client=rag_client)
 
 # Agentic  
-agentic_rag = AgenticRAG(milvus, llm)
+agentic_rag = AgenticRAG(rag_client, llm)
 runner_agentic = EvaluationRunner(rag_client=agentic_rag)
 
 # 对比
@@ -547,6 +554,8 @@ report_agentic = runner_agentic.run_all()
 """
 
 from itertools import product
+from rag.retriever import get_rag_client_by_provider
+from settings import settings
 
 chunk_strategies = [ChunkStrategy.PARAGRAPH, ChunkStrategy.SENTENCE]
 index_types = ["FLAT", "HNSW", "IVF_FLAT"]
@@ -563,8 +572,8 @@ for chunk, index, agentic in product(chunk_strategies, index_types, agentic_mode
     
     # 2. 选择 RAG 客户端
     with builder.use_chunk_strategy(chunk):
-        milvus = MilvusProvider()
-        rag_client = AgenticRAG(milvus, llm) if agentic else milvus
+        base_rag = get_rag_client_by_provider(settings.rag_provider)
+        rag_client = AgenticRAG(base_rag, llm) if agentic else base_rag
         
         # 3. 运行评估
         runner = EvaluationRunner(rag_client=rag_client, llm_client=llm)
@@ -653,7 +662,7 @@ evaluation/
   "run_id": "7c015e51",
   "run_at": "2025-11-27T11:00:21",
   "total_qa_pairs": 5,
-  "rag_provider": "MilvusProvider",
+  "rag_provider": "sqlite",
   "embedding_model": "qwen3-embedding:4b",
   "l1_paper_discovery": {
     "precision_at_5": 0.24,
@@ -689,7 +698,7 @@ evaluation/
 class EvaluationRunner:
     def __init__(
         self,
-        rag_client: RAG,                    # MilvusProvider 或兼容接口
+        rag_client: RAG,                    # 任意兼容 RAG provider
         llm_client: BaseChatModel = None,   # L3 评估需要
         config: EvaluationConfig = None
     ):
@@ -731,7 +740,7 @@ class CollectionBuilder:
         """Context Manager: 临时切换到指定策略的 collection"""
         # 用法:
         # with builder.use_chunk_strategy(ChunkStrategy.PARAGRAPH):
-        #     milvus = MilvusProvider()  # 使用切换后的 collection
+        #     rag_client = get_rag_client_by_provider(settings.rag_provider)  # 使用切换后的表/collection
 ```
 
 ### QAGenerator

@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     debug_mode: bool = False
     database_url: Optional[str] = None
 
-    rag_provider: str = "milvus"
+    rag_provider: str = "sqlite"
+    rag_top_k: int = 10
 
     # --- Milvus / vectorstore ---
     milvus_uri: str = "http://localhost:19530" # Default to standalone, can be file path for lite
@@ -38,6 +39,11 @@ class Settings(BaseSettings):
     milvus_section_category_field: str = "section_category"
     milvus_parent_section_field: str = "parent_section"
     milvus_page_number_field: str = "page_number"
+
+    # --- SQLite / sqlite-vec ---
+    sqlite_path: str = "./data/rag.sqlite"
+    sqlite_table: str = "papers"
+    sqlite_distance_metric: str = ""  # Optional override (e.g., "cosine"); defaults to milvus metric
 
     # --- Postgres / PGVector ---
     postgres_user: str = "postgres"

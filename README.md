@@ -79,7 +79,7 @@ graph LR
     Collector["Collector Agent"]
     Parser["PDF Parser<br/>Structure-Aware"]
     Chunker["Chunker<br/>Sentence-Merge + Context"]
-    RAG["Milvus Vector DB<br/>Structure-Indexed"]
+    RAG["SQLite Vec DB<br/>Structure-Indexed"]
     
     Web -->|HTML Scraping| Collector
     Collector -->|PDF Download| Parser
@@ -147,7 +147,9 @@ results = loader.load_papers(["doc_id_1", "doc_id_2"])
 # 4. Invoke callback for evaluation tracking
 ```
 
-#### Milvus Vector DB (`milvus.py`)
+#### Vector DB Providers (`sqlite_vec.py`, `milvus.py`)
+Default provider is **SQLite + sqlite-vec**. Milvus remains available as an optional provider.
+
 **Unified schema** (papers + chunks):
 - `doc_id`: Paper identifier
 - `chunk_id`: Sequential chunk index (-1 = paper record, ≥0 = chunk record)
@@ -170,10 +172,17 @@ get_paper_introduction(doc_id)    # Background context
 |-------|-----------|
 | **LLM & Agents** | LangChain (v1.0), Kimi-K2, DeepSeek API |
 | **Embeddings** | OpenAI, HuggingFace Sentence Transformers |
-| **Vector DB** | Milvus Lite / Milvus Cloud |
+| **Vector DB** | SQLite + sqlite-vec (default), Milvus (optional) |
 | **PDF Processing** | PyMuPDF, pdfplumber, PyPDF |
 | **Web Scraping** | BeautifulSoup4, DuckDuckGo Search |
 | **Framework** | Python 3.13+, Pydantic v2 |
+
+## Vector DB Setup
+- Default provider: SQLite + sqlite-vec
+- Install sqlite-vec: `uv add --optional sqlite sqlite-vec`
+- Optional Milvus: `uv add --optional milvus pymilvus==2.6.3` (and `uv add --optional milvus-lite milvus-lite` for local lite)
+- Set provider in `.env`: `RAG_PROVIDER=sqlite` (or `milvus`)
+- SQLite DB path: `SQLITE_PATH=./data/rag.sqlite`
 
 ## Key Design Decisions
 
@@ -234,7 +243,7 @@ result = workflow(user_input)
 - HTML parser agent learns page structure automatically
 
 ✅ **Scalable**
-- Milvus supports both lite (local) and cloud deployment
+- SQLite is the default (local, zero-ops); Milvus remains available as an optional provider
 - Lazy loading reduces memory footprint
 - Evaluation pipeline for chunking strategy comparison
 

@@ -86,12 +86,13 @@ class PGVectorProvider(RAG):
         # Convert list of floats to string representation for pgvector '[1.0, 2.0, ...]'
         vector_str = str(query_vector)
         
+        top_k = getattr(settings, "rag_top_k", None) or settings.milvus_top_k
         search_query = f"""
         SELECT title, abstract, doc_id, url, conference_name, conference_year, conference_round,
                (embedding <-> %s::vector) as distance
         FROM {self.table_name}
         ORDER BY distance ASC
-        LIMIT {settings.milvus_top_k};
+        LIMIT {top_k};
         """
         
         with self.conn.cursor() as cur:

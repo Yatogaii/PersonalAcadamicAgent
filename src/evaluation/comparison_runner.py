@@ -16,6 +16,7 @@ from datetime import datetime
 import json
 
 from logging_config import logger
+from settings import settings
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -116,7 +117,7 @@ class AgenticRAGAdapter:
     def __init__(self, base_rag_client, llm_client):
         """
         Args:
-            base_rag_client: 底层 MilvusProvider
+            base_rag_client: 底层 RAG Provider
             llm_client: LLM 客户端
         """
         self.base_rag = base_rag_client
@@ -172,6 +173,19 @@ class ComparisonRunner:
         
         # 缓存文件路径
         self._cache_file = self.config.reports_dir / ".comparison_cache.json"
+
+    def _new_rag_client(self):
+        provider = settings.rag_provider
+        if provider == "sqlite":
+            from rag.sqlite_vec import SQLiteVecProvider
+            return SQLiteVecProvider()
+        if provider == "milvus":
+            from rag.milvus import MilvusProvider
+            return MilvusProvider()
+        if provider == "pgvector":
+            from rag.pgvector import PGVectorProvider
+            return PGVectorProvider()
+        raise ValueError(f"Unsupported RAG provider for evaluation: {provider}")
     
     def _load_cache(self) -> dict[str, dict]:
         """加载已完成实验的缓存"""
@@ -218,10 +232,8 @@ class ComparisonRunner:
         Returns:
             每种策略的处理结果
         """
-        from rag.milvus import MilvusProvider
-        
         strategies = strategies or self.config.chunk_strategies
-        source_rag = MilvusProvider()
+        source_rag = self._new_rag_client()
         
         pipeline = DataPreparationPipeline(
             source_rag_client=source_rag,
@@ -256,8 +268,6 @@ class ComparisonRunner:
         Returns:
             ExperimentResult
         """
-        from rag.milvus import MilvusProvider
-        
         logger.info(f"Running experiment: {experiment.name}")
         
         # 1. 重建 collection（使用指定的索引类型）
@@ -269,7 +279,7 @@ class ComparisonRunner:
         
         # 2. 从 chunks 文件重建数据
         pipeline = DataPreparationPipeline(
-            source_rag_client=MilvusProvider(),  # 业务库
+            source_rag_client=self._new_rag_client(),  # 业务库
             llm_client=self.llm,
             config=self.config
         )
@@ -277,13 +287,11 @@ class ComparisonRunner:
         
         # 3. 切换到评估 collection 并运行评估
         with self.builder.use_chunk_strategy(experiment.chunk_strategy):
-            milvus = MilvusProvider()
+            rag_client = self._new_rag_client()
             
             # 根据是否 agentic 选择 RAG 客户端
             if experiment.enable_agentic_rag:
-                rag_client = AgenticRAGAdapter(milvus, self.llm)
-            else:
-                rag_client = milvus
+                rag_client = AgenticRAGAdapter(rag_client, self.llm)
             
             # 创建 Runner
             runner = EvaluationRunner(

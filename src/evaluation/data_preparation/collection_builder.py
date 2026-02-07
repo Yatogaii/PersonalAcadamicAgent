@@ -10,13 +10,14 @@ Collection Builder
 from typing import TYPE_CHECKING, Optional
 from dataclasses import dataclass
 from contextlib import contextmanager
-
-from pymilvus import MilvusClient
+from pathlib import Path
+import sqlite3
 
 from logging_config import logger
 from settings import settings
 
 if TYPE_CHECKING:
+    from pymilvus import MilvusClient
     from rag.milvus import MilvusProvider
 
 from evaluation.config import EvaluationConfig, ChunkStrategy, IndexType
@@ -67,21 +68,95 @@ class CollectionBuilder:
             config: 评估配置
         """
         self.config = config or EvaluationConfig()
-        self._client: Optional[MilvusClient] = None
+        self._client: Optional["MilvusClient"] = None
+        self._sqlite_conn: Optional[sqlite3.Connection] = None
     
     @property
-    def client(self) -> MilvusClient:
+    def client(self) -> "MilvusClient":
         """获取 Milvus 客户端（延迟创建）"""
+        if settings.rag_provider == "sqlite":
+            raise RuntimeError("Milvus client requested while using sqlite provider.")
         if self._client is None:
+            from pymilvus import MilvusClient
             self._client = MilvusClient(
                 uri=settings.milvus_uri,
                 token=settings.milvus_token
             )
         return self._client
+
+    def _sqlite_connection(self) -> sqlite3.Connection:
+        if self._sqlite_conn is None:
+            try:
+                import sqlite_vec
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    "sqlite-vec is not installed. Install with `uv add --optional sqlite sqlite-vec`."
+                ) from exc
+
+            db_path = Path(settings.sqlite_path).expanduser()
+            if str(db_path) != ":memory:":
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+            self._sqlite_conn = conn
+
+        return self._sqlite_conn
     
     def _get_collection_name(self, chunk_strategy: ChunkStrategy) -> str:
         """生成 collection 名称"""
         return f"papers_eval_{chunk_strategy.value}"
+
+    # ============== SQLite Helpers ==============
+
+    def _sqlite_table_exists(self, table_name: str) -> bool:
+        conn = self._sqlite_connection()
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+            (table_name,),
+        )
+        return cur.fetchone() is not None
+
+    def _sqlite_drop_table(self, table_name: str) -> None:
+        conn = self._sqlite_connection()
+        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+        conn.commit()
+
+    def _sqlite_create_table(self, table_name: str) -> None:
+        columns = [
+            f"{settings.milvus_vector_field} float[{self.config.embedding_dim}]",
+            f"{settings.milvus_doc_id_field} TEXT",
+            f"{settings.milvus_chunk_id_field} INTEGER",
+            f"{settings.milvus_section_category_field} INTEGER",
+            f"{settings.milvus_conference_name_field} TEXT",
+            f"{settings.milvus_conference_year_field} INTEGER",
+            f"{settings.milvus_conference_round_field} TEXT",
+            f"+{settings.milvus_title_field} TEXT",
+            f"+{settings.milvus_text_field} TEXT",
+            f"+{settings.milvus_url_field} TEXT",
+            f"+{settings.milvus_pdf_url_field} TEXT",
+            f"+{settings.milvus_parent_section_field} TEXT",
+            f"+{settings.milvus_page_number_field} INTEGER",
+        ]
+
+        metric = (
+            settings.sqlite_distance_metric
+            or settings.milvus_vector_index_metric_type
+            or ""
+        ).strip().upper()
+
+        if metric == "COSINE":
+            columns.append("distance_metric=cosine")
+        elif metric and metric != "L2":
+            logger.warning("Unsupported sqlite-vec metric '%s', falling back to L2.", metric)
+
+        sql = f"CREATE VIRTUAL TABLE IF NOT EXISTS {table_name} USING vec0({', '.join(columns)})"
+        conn = self._sqlite_connection()
+        conn.execute(sql)
+        conn.commit()
     
     # ============== Collection 管理 ==============
     
@@ -104,9 +179,22 @@ class CollectionBuilder:
         Returns:
             collection 名称
         """
-        from rag.milvus import MilvusProvider
-        
         collection_name = self._get_collection_name(chunk_strategy)
+
+        if settings.rag_provider == "sqlite":
+            if self._sqlite_table_exists(collection_name):
+                if drop_if_exists:
+                    logger.info(f"Dropping existing table: {collection_name}")
+                    self._sqlite_drop_table(collection_name)
+                else:
+                    logger.info(f"Table already exists: {collection_name}")
+                    return collection_name
+
+            self._sqlite_create_table(collection_name)
+            logger.info(f"Created table: {collection_name} (sqlite-vec)")
+            return collection_name
+        
+        from rag.milvus import MilvusProvider
         
         # 检查是否存在
         if self.client.has_collection(collection_name):
@@ -145,7 +233,14 @@ class CollectionBuilder:
     def drop_collection(self, chunk_strategy: ChunkStrategy) -> bool:
         """删除 collection"""
         collection_name = self._get_collection_name(chunk_strategy)
-        
+        if settings.rag_provider == "sqlite":
+            if not self._sqlite_table_exists(collection_name):
+                logger.warning(f"Table does not exist: {collection_name}")
+                return False
+            self._sqlite_drop_table(collection_name)
+            logger.info(f"Dropped table: {collection_name}")
+            return True
+
         if not self.client.has_collection(collection_name):
             logger.warning(f"Collection does not exist: {collection_name}")
             return False
@@ -157,6 +252,8 @@ class CollectionBuilder:
     def collection_exists(self, chunk_strategy: ChunkStrategy) -> bool:
         """检查 collection 是否存在"""
         collection_name = self._get_collection_name(chunk_strategy)
+        if settings.rag_provider == "sqlite":
+            return self._sqlite_table_exists(collection_name)
         return self.client.has_collection(collection_name)
     
     # ============== Settings 切换 ==============
@@ -173,9 +270,20 @@ class CollectionBuilder:
                 loader.load_papers(doc_ids)
             # 退出后自动恢复原 collection
         """
-        original_collection = settings.milvus_collection
         eval_collection = self._get_collection_name(chunk_strategy)
-        
+
+        if settings.rag_provider == "sqlite":
+            original_table = settings.sqlite_table
+            try:
+                settings.sqlite_table = eval_collection
+                logger.info(f"Switched to eval table: {eval_collection}")
+                yield eval_collection
+            finally:
+                settings.sqlite_table = original_table
+                logger.info(f"Restored to original table: {original_table}")
+            return
+
+        original_collection = settings.milvus_collection
         try:
             settings.milvus_collection = eval_collection
             logger.info(f"Switched to eval collection: {eval_collection}")
@@ -193,11 +301,23 @@ class CollectionBuilder:
         - settings.milvus_collection
         - settings.chunk_strategy
         """
-        original_collection = settings.milvus_collection
-        original_strategy = settings.chunk_strategy
-        
         eval_collection = self._get_collection_name(chunk_strategy)
-        
+        original_strategy = settings.chunk_strategy
+
+        if settings.rag_provider == "sqlite":
+            original_table = settings.sqlite_table
+            try:
+                settings.sqlite_table = eval_collection
+                settings.chunk_strategy = chunk_strategy.value
+                logger.info(f"Switched to: table={eval_collection}, strategy={chunk_strategy.value}")
+                yield eval_collection
+            finally:
+                settings.sqlite_table = original_table
+                settings.chunk_strategy = original_strategy
+                logger.info(f"Restored to: table={original_table}, strategy={original_strategy}")
+            return
+
+        original_collection = settings.milvus_collection
         try:
             settings.milvus_collection = eval_collection
             settings.chunk_strategy = chunk_strategy.value
@@ -226,6 +346,10 @@ class CollectionBuilder:
             是否成功
         """
         collection_name = self._get_collection_name(chunk_strategy)
+
+        if settings.rag_provider == "sqlite":
+            logger.info("SQLite vec0 uses brute-force search; rebuild_index skipped.")
+            return True
         
         if not self.client.has_collection(collection_name):
             logger.error(f"Collection does not exist: {collection_name}")
@@ -273,6 +397,9 @@ class CollectionBuilder:
     def get_current_index_type(self, chunk_strategy: ChunkStrategy) -> Optional[IndexType]:
         """获取当前 collection 的 index 类型"""
         collection_name = self._get_collection_name(chunk_strategy)
+
+        if settings.rag_provider == "sqlite":
+            return None
         
         if not self.client.has_collection(collection_name):
             return None
@@ -306,7 +433,28 @@ class CollectionBuilder:
     def get_collection_stats(self, chunk_strategy: ChunkStrategy) -> Optional[CollectionStats]:
         """获取 collection 统计信息"""
         collection_name = self._get_collection_name(chunk_strategy)
-        
+        if settings.rag_provider == "sqlite":
+            if not self._sqlite_table_exists(collection_name):
+                return None
+            try:
+                conn = self._sqlite_connection()
+                total_records = conn.execute(
+                    f"SELECT COUNT(*) FROM {collection_name}"
+                ).fetchone()[0]
+                total_papers = conn.execute(
+                    f"SELECT COUNT(*) FROM {collection_name} WHERE {settings.milvus_chunk_id_field} = -1"
+                ).fetchone()[0]
+                return CollectionStats(
+                    name=collection_name,
+                    total_records=total_records,
+                    total_papers=total_papers,
+                    index_type="vec0",
+                    embedding_dim=self.config.embedding_dim,
+                )
+            except Exception as e:
+                logger.error(f"Failed to get table stats: {e}")
+                return None
+
         if not self.client.has_collection(collection_name):
             return None
         
@@ -342,6 +490,13 @@ class CollectionBuilder:
     
     def list_all_collections(self) -> list[str]:
         """列出所有 evaluation collection"""
+        if settings.rag_provider == "sqlite":
+            conn = self._sqlite_connection()
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'papers_eval_%'"
+            )
+            return [row[0] for row in cur.fetchall()]
+
         all_collections = self.client.list_collections()
         # 只返回评估相关的 collection
         return [c for c in all_collections if c.startswith("papers_eval_")]

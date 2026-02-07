@@ -13,7 +13,7 @@ from dataclasses import dataclass, asdict
 from logging_config import logger
 
 if TYPE_CHECKING:
-    from rag.milvus import MilvusProvider
+    from rag.retriever import RAG
 
 from evaluation.config import EvaluationConfig
 
@@ -34,10 +34,10 @@ class PaperSource:
 class DataExporter:
     """从业务库导出数据"""
     
-    def __init__(self, rag_client: "MilvusProvider", config: Optional[EvaluationConfig] = None):
+    def __init__(self, rag_client: "RAG", config: Optional[EvaluationConfig] = None):
         """
         Args:
-            rag_client: 业务库的 MilvusProvider 客户端
+            rag_client: 业务库的 RAG 客户端
             config: 评估配置
         """
         self.rag_client = rag_client
@@ -62,19 +62,82 @@ class DataExporter:
         Returns:
             PaperSource 列表
         """
-        # 构建查询条件：paper-level 记录 (chunk_id == -1) 且有 pdf_url
-        filters = [f"{self.rag_client.chunk_id_field} == -1"]
+        if hasattr(self.rag_client, "conn"):
+            papers = self._export_sqlite(conference, year)
+        else:
+            papers = self._export_milvus(conference, year)
         
+        logger.info(f"Found {len(papers)} papers with pdf_url")
+        
+        # 抽样（如果需要）
+        if sample_size and sample_size < len(papers):
+            random.seed(42)  # 固定种子，保证可复现
+            papers = random.sample(papers, sample_size)
+            logger.info(f"Sampled {len(papers)} papers")
+        
+        return papers
+
+    def _export_sqlite(self, conference: Optional[str], year: Optional[int]) -> list[PaperSource]:
+        clauses = [f"{self.rag_client.chunk_id_field} = -1"]
+        params: list = []
+
+        if conference:
+            clauses.append(f"{self.rag_client.conference_name_field} = ?")
+            params.append(conference)
+        if year:
+            clauses.append(f"{self.rag_client.conference_year_field} = ?")
+            params.append(year)
+
+        where_sql = " AND ".join(clauses)
+        logger.info(f"Querying papers with filter: {where_sql}")
+
+        sql = f"""
+        SELECT
+            {self.rag_client.doc_id_field},
+            {self.rag_client.title_field},
+            {self.rag_client.text_field},
+            {self.rag_client.pdf_url_field},
+            {self.rag_client.url_field},
+            {self.rag_client.conference_name_field},
+            {self.rag_client.conference_year_field},
+            {self.rag_client.conference_round_field}
+        FROM {self.rag_client.table}
+        WHERE {where_sql}
+        """
+        cur = self.rag_client.conn.execute(sql, params)
+        results = cur.fetchall()
+        logger.info(f"Found {len(results)} paper-level records")
+
+        papers: list[PaperSource] = []
+        for r in results:
+            pdf_url = r[self.rag_client.pdf_url_field] or ""
+            if not pdf_url.strip():
+                continue
+            papers.append(
+                PaperSource(
+                    doc_id=r[self.rag_client.doc_id_field] or "",
+                    title=r[self.rag_client.title_field] or "",
+                    abstract=r[self.rag_client.text_field] or "",
+                    pdf_url=pdf_url,
+                    url=r[self.rag_client.url_field] or "",
+                    conference_name=r[self.rag_client.conference_name_field] or "",
+                    conference_year=r[self.rag_client.conference_year_field] or 0,
+                    conference_round=r[self.rag_client.conference_round_field] or "",
+                )
+            )
+        return papers
+
+    def _export_milvus(self, conference: Optional[str], year: Optional[int]) -> list[PaperSource]:
+        filters = [f"{self.rag_client.chunk_id_field} == -1"]
+
         if conference:
             filters.append(f'{self.rag_client.conference_name_field} == "{conference}"')
         if year:
             filters.append(f'{self.rag_client.conference_year_field} == {year}')
-        
+
         filter_expr = " && ".join(filters)
-        
         logger.info(f"Querying papers with filter: {filter_expr}")
-        
-        # 查询所有符合条件的 paper-level 记录
+
         results = self.rag_client.client.query(
             collection_name=self.rag_client.collection,
             filter=filter_expr,
@@ -88,37 +151,30 @@ class DataExporter:
                 self.rag_client.conference_year_field,
                 self.rag_client.conference_round_field,
             ],
-            limit=10000  # 足够大，获取全部
+            limit=10000,
         )
-        
+
         logger.info(f"Found {len(results)} paper-level records")
-        
-        # 过滤有 pdf_url 的记录，并转换为 PaperSource
+
         papers: list[PaperSource] = []
         for r in results:
             pdf_url = r.get(self.rag_client.pdf_url_field, "")
             if not pdf_url or not pdf_url.strip():
-                continue  # 跳过没有 pdf_url 的
-            
-            papers.append(PaperSource(
-                doc_id=r.get(self.rag_client.doc_id_field, ""),
-                title=r.get(self.rag_client.title_field, ""),
-                abstract=r.get(self.rag_client.text_field, ""),
-                pdf_url=pdf_url,
-                url=r.get(self.rag_client.url_field, ""),
-                conference_name=r.get(self.rag_client.conference_name_field, ""),
-                conference_year=r.get(self.rag_client.conference_year_field, 0),
-                conference_round=r.get(self.rag_client.conference_round_field, ""),
-            ))
-        
-        logger.info(f"Found {len(papers)} papers with pdf_url")
-        
-        # 抽样（如果需要）
-        if sample_size and sample_size < len(papers):
-            random.seed(42)  # 固定种子，保证可复现
-            papers = random.sample(papers, sample_size)
-            logger.info(f"Sampled {len(papers)} papers")
-        
+                continue
+
+            papers.append(
+                PaperSource(
+                    doc_id=r.get(self.rag_client.doc_id_field, ""),
+                    title=r.get(self.rag_client.title_field, ""),
+                    abstract=r.get(self.rag_client.text_field, ""),
+                    pdf_url=pdf_url,
+                    url=r.get(self.rag_client.url_field, ""),
+                    conference_name=r.get(self.rag_client.conference_name_field, ""),
+                    conference_year=r.get(self.rag_client.conference_year_field, 0),
+                    conference_round=r.get(self.rag_client.conference_round_field, ""),
+                )
+            )
+
         return papers
     
     def export_to_file(
