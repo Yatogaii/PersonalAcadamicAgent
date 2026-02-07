@@ -1,0 +1,131 @@
+```mermaid
+graph TD
+    %% Coordinator Graph
+    START([START]) --> COORD[coordinator<br/>router]
+    
+    COORD -->|intent=collect| COLL[collector<br/>subgraph]
+    COORD -->|intent=search| SRCH[searcher<br/>subgraph]
+    
+    COLL --> END([END])
+    SRCH --> END
+    
+    %% Collector Subgraph Detail
+    subgraph CollectorWorkflow[Collector Subgraph]
+        C_START --> C_EXTRACT[extract_parameters]
+        C_EXTRACT --> C_CHECK[check_existing]
+        C_CHECK -->|round=unspecified| C_DISCOVER[discover_rounds]
+        C_CHECK -->|round specified| C_PARSE[parse_papers]
+        C_DISCOVER --> C_PARSE
+        C_PARSE --> C_ENRICH[enrich_papers]
+        C_ENRICH --> C_SAVE[save_to_db]
+        C_SAVE --> C_END
+    end
+    
+    %% Searcher Subgraph Detail
+    subgraph SearcherWorkflow[Searcher Subgraph - Agentic RAG]
+        S_START --> S_ANALYZE[analyze_query]
+        S_ANALYZE --> S_HYDE[generate_hyde<br/>optional]
+        S_HYDE --> S_ABSTRACT[search_abstracts]
+        S_ABSTRACT --> S_CHECK{more<br/>sub-queries?}
+        S_CHECK -->|yes| S_ABSTRACT
+        S_CHECK -->|no| S_LOAD[load_pdfs]
+        S_LOAD --> S_CONTENT[search_content]
+        S_CONTENT --> S_EVAL{evaluate<br/>progress}
+        S_EVAL -->|continue| S_CONTENT
+        S_EVAL -->|sufficient| S_RERANK[rerank_results]
+        S_RERANK --> S_ANSWER[generate_answer]
+        S_ANSWER --> S_END
+    end
+    
+    %% Connect subgraphs
+    COLL -.->|invokes| CollectorWorkflow
+    SRCH -.->|invokes| SearcherWorkflow
+    
+    %% Styling
+    style START fill:#90EE90
+    style END fill:#FFB6C1
+    style COORD fill:#87CEEB
+    style COLL fill:#DDA0DD
+    style SRCH fill:#F0E68C
+    style S_EVAL fill:#FFA07A
+    style S_CHECK fill:#FFA07A
+```
+
+## ASCII Diagram (For Terminal)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           Coordinator Graph                                   │
+│                                                                               │
+│   [START] ──────▶ [coordinator] ──────┬──────────┐                           │
+│    (input)        (router node)       │          │                           │
+│                                       │          │                           │
+│                     ┌─────────────────┘          └─────────────────┐         │
+│                     │                                              │         │
+│                     ▼                                              ▼         │
+│            ┌────────────────┐                           ┌────────────────┐   │
+│            │ Collector      │                           │ Searcher       │   │
+│            │ Subgraph       │                           │ Subgraph       │   │
+│            │ (6 nodes)      │                           │ (9 nodes)      │   │
+│            └───────┬────────┘                           └───────┬────────┘   │
+│                    │                                            │            │
+│                    └────────────────────┬───────────────────────┘            │
+│                                         ▼                                    │
+│                                      [END]                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Collector Workflow:                    Searcher Workflow (Agentic RAG):
+┌────────────────────────────────┐    ┌────────────────────────────────────────┐
+│ extract_parameters             │    │ analyze_query ──▶ generate_hyde       │
+│        │                       │    │                       │                │
+│        ▼                       │    │                       ▼                │
+│ check_existing ──▶ discover_   │    │              search_abstracts         │
+│        │              rounds    │    │                       │                │
+│        │              (if      │    │                       ▼                │
+│        │           needed)     │    │              load_pdfs ──▶ search_     │
+│        │                       │    │                              content   │
+│        └──────────▶ parse_     │    │                               │        │
+│                     papers     │    │                               ▼        │
+│                       │        │    │                         evaluate       │
+│                       ▼        │    │                         progress       │
+│               enrich_papers    │    │                          (loop)        │
+│                       │        │    │                               │        │
+│                       ▼        │    │                               ▼        │
+│                 save_to_db     │    │                        rerank_         │
+│                       │        │    │                         results        │
+│                       ▼        │    │                               │        │
+│                      END       │    │                               ▼        │
+└────────────────────────────────┘    │                        generate_       │
+                                      │                         answer         │
+                                      │                               │        │
+                                      │                               ▼        │
+                                      │                              END       │
+                                      └────────────────────────────────────────┘
+```
+
+## Key Metrics
+
+| Graph | Nodes | Edges | Subgraphs | State Fields |
+|-------|-------|-------|-----------|--------------|
+| **Coordinator** | 4 | 3 | 2 | 5 (messages, intent, query, goto, error) |
+| **Collector** | 6 | 6 | 0 | 9 (conference, year, round, etc.) |
+| **Searcher** | 9 | 10+ | 0 | 14 (query, analysis, results, etc.) |
+
+## State Types
+
+```typescript
+// CoordinatorState
+{
+  messages: Annotated<list, add_messages>  // Auto-merged
+  intent: "collect" | "search"
+  original_query: string
+  goto: "collector" | "searcher" | "end"
+  error?: string
+}
+
+// Command Pattern for Routing
+type Command = {
+  goto: NodeName
+  update: Partial<State>
+}
+```
